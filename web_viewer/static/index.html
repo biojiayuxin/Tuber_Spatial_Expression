@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Spatial Gene Expression Viewer</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark"></div>
+        <div>
+          <h1>Spatial Expression</h1>
+          <p>空间转录组表达量查看器</p>
+        </div>
+      </div>
+
+      <form id="geneForm" class="search">
+        <label for="geneInput">Gene ID</label>
+        <div class="search-row">
+          <input id="geneInput" name="gene" type="search" value="Soltu.DM.03G024100" autocomplete="off" list="geneList">
+          <button type="submit">查询</button>
+        </div>
+        <datalist id="geneList"></datalist>
+      </form>
+
+      <div class="sample-toggle" role="group" aria-label="Sample">
+        <button type="button" data-sample="S1" class="active">S1</button>
+        <button type="button" data-sample="S2">S2</button>
+      </div>
+
+      <div class="stats">
+        <div>
+          <span>当前基因</span>
+          <strong id="currentGene">-</strong>
+        </div>
+        <div>
+          <span>样本</span>
+          <strong id="currentSample">S1</strong>
+        </div>
+        <div>
+          <span>细胞数</span>
+          <strong id="cellCount">-</strong>
+        </div>
+        <div>
+          <span>表达细胞</span>
+          <strong id="nonzeroCount">-</strong>
+        </div>
+        <div>
+          <span>表达范围</span>
+          <strong id="rangeText">-</strong>
+        </div>
+      </div>
+
+      <div class="legend">
+        <div class="legend-bar"></div>
+        <div class="legend-labels">
+          <span id="legendMax">max</span>
+          <span id="legendMin">0</span>
+        </div>
+      </div>
+
+      <div id="status" class="status">加载空间坐标中...</div>
+    </aside>
+
+    <main class="viewer">
+      <section class="spatial-stage" aria-label="Spatial expression plot">
+        <div class="toolbar">
+          <button type="button" id="zoomIn" title="放大">+</button>
+          <button type="button" id="zoomOut" title="缩小">-</button>
+          <button type="button" id="resetView" title="重置视图">重置</button>
+          <span id="scaleText">100%</span>
+        </div>
+        <canvas id="plot"></canvas>
+      </section>
+      <section class="dotplot-stage" aria-label="Cluster dotplot">
+        <canvas id="dotplot"></canvas>
+      </section>
+    </main>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

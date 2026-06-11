@@ -1,0 +1,15 @@
+# Python runtime artifacts
+__pycache__/
+*.py[cod]
+
+# Local generated caches
+web_viewer/cache/
+
+# Large generated database
+web_viewer/data/expression.sqlite
+web_viewer/data/*.sqlite
+web_viewer/data/*.sqlite-*
+
+# Local logs and temporary files
+*.log
+.DS_Store
