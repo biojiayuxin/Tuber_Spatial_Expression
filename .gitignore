@@ -1,6 +1,13 @@
+# Track only the web viewer package in this repository.
+*
+!/.gitignore
+!/web_viewer/
+!/web_viewer/**
+
 # Python runtime artifacts
 __pycache__/
 *.py[cod]
+web_viewer/__pycache__/
 
 # Local generated caches
 web_viewer/cache/
