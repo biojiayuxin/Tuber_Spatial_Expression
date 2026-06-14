@@ -18,6 +18,7 @@ const state = {
   expressions: {},
   clusterMeta: { clusters: [], maps: {} },
   tissueMeta: { tissues: [], maps: {}, error: "" },
+  categoryColors: { clusters: new Map(), tissues: new Map() },
   displayMode: "gene",
   selectedCluster: "",
   selectedTissue: "",
@@ -63,10 +64,26 @@ const REDS = [
   [103, 0, 13],
 ];
 
-const CLUSTER_HIGHLIGHT = [21, 101, 192];
-const CLUSTER_MUTED = [214, 219, 226];
-const TISSUE_HIGHLIGHT = [46, 125, 50];
-const TISSUE_MUTED = [214, 219, 226];
+const CATEGORY_MUTED = [214, 219, 226];
+const FALLBACK_CATEGORY_COLORS = [
+  [78, 121, 167],
+  [242, 142, 43],
+  [225, 87, 89],
+  [118, 183, 178],
+  [89, 161, 79],
+  [237, 201, 72],
+  [176, 122, 161],
+  [255, 157, 167],
+  [156, 117, 95],
+  [186, 176, 172],
+];
+const TISSUE_MENU_ORDER = [
+  "epidermis/periderm",
+  "cortex",
+  "perimedullary region",
+  "pith",
+  "others",
+];
 
 function setStatus(message) {
   els.status.textContent = message;
@@ -231,11 +248,11 @@ function currentTissueMap() {
 }
 
 function selectedClusterLabel() {
-  return state.selectedCluster ? `Cluster ${state.selectedCluster}` : "Cluster";
+  return state.selectedCluster ? `Cluster ${state.selectedCluster}` : "all clusters";
 }
 
 function selectedTissueLabel() {
-  if (!state.selectedTissue) return "Tissue";
+  if (!state.selectedTissue) return "all tissues";
   const tissue = state.tissueMeta.tissues.find((item) => String(item.id) === state.selectedTissue);
   return tissue ? tissue.label || tissue.id : state.selectedTissue;
 }
@@ -287,6 +304,37 @@ function colorForValue(value, range) {
 
 function rgbCss(rgb) {
   return `rgb(${rgb[0]},${rgb[1]},${rgb[2]})`;
+}
+
+function hexToRgb(hex) {
+  const match = /^#?([0-9a-f]{6})$/i.exec(String(hex || "").trim());
+  if (!match) return null;
+  const value = Number.parseInt(match[1], 16);
+  return [
+    (value >> 16) & 255,
+    (value >> 8) & 255,
+    value & 255,
+  ];
+}
+
+function fallbackCategoryColor(id) {
+  const text = String(id || "");
+  let hash = 0;
+  for (let i = 0; i < text.length; i += 1) {
+    hash = (hash * 31 + text.charCodeAt(i)) >>> 0;
+  }
+  return FALLBACK_CATEGORY_COLORS[hash % FALLBACK_CATEGORY_COLORS.length];
+}
+
+function categoryColor(kind, id) {
+  const colorMap = kind === "tissue" ? state.categoryColors.tissues : state.categoryColors.clusters;
+  const configured = colorMap.get(String(id));
+  return configured || fallbackCategoryColor(id);
+}
+
+function maybeMutedCategoryColor(rgb, id, selectedId) {
+  if (selectedId && String(id) !== selectedId) return CATEGORY_MUTED;
+  return rgb;
 }
 
 function invertRgb(rgb) {
@@ -425,15 +473,15 @@ function translatedBBox(cell, panel) {
 
 function cellFillColor(cell, expression, clusterMap, tissueMap) {
   if (state.displayMode === "cluster") {
-    return clusterMap.get(cell.id) === state.selectedCluster
-      ? CLUSTER_HIGHLIGHT
-      : CLUSTER_MUTED;
+    const clusterId = clusterMap.get(cell.id);
+    if (clusterId === undefined) return CATEGORY_MUTED;
+    return maybeMutedCategoryColor(categoryColor("cluster", clusterId), clusterId, state.selectedCluster);
   }
 
   if (state.displayMode === "tissue") {
-    return tissueMap.get(cell.id) === state.selectedTissue
-      ? TISSUE_HIGHLIGHT
-      : TISSUE_MUTED;
+    const tissueId = tissueMap.get(cell.id);
+    if (tissueId === undefined) return CATEGORY_MUTED;
+    return maybeMutedCategoryColor(categoryColor("tissue", tissueId), tissueId, state.selectedTissue);
   }
 
   const value = expression.map.get(cell.id) || 0;
@@ -790,7 +838,11 @@ async function loadSpatial() {
     }
     return payload;
   });
-  const [s1, s2, replicates, clusters, tissues] = await Promise.all([
+  const colorsRequest = fetch("/api/colors").then(async (response) => {
+    if (!response.ok) return { clusters: {}, tissues: {} };
+    return response.json();
+  }).catch(() => ({ clusters: {}, tissues: {} }));
+  const [s1, s2, replicates, clusters, tissues, colors] = await Promise.all([
     fetch("/data/contours/S1/manifest.json").then((response) => {
       if (!response.ok) throw new Error("Missing S1 contour data; run web_viewer/export_contours.py first");
       return response.json();
@@ -808,15 +860,41 @@ async function loadSpatial() {
       return response.json();
     }),
     tissueRequest,
+    colorsRequest,
   ]);
 
   state.samples.S1 = prepareSpatial(s1, replicates.samples.S1);
   state.samples.S2 = prepareSpatial(s2, replicates.samples.S2);
+  loadCategoryColors(colors);
   loadClusterMeta(clusters);
   loadTissueMeta(tissues);
   fitView();
   updateStats();
   requestDraw();
+}
+
+function loadCategoryColors(payload) {
+  const clusters = new Map();
+  const tissues = new Map();
+  for (const [id, color] of Object.entries(payload.clusters || {})) {
+    const rgb = hexToRgb(color);
+    if (rgb) clusters.set(String(id), rgb);
+  }
+  for (const [id, color] of Object.entries(payload.tissues || {})) {
+    const rgb = hexToRgb(color);
+    if (rgb) tissues.set(String(id), rgb);
+  }
+  state.categoryColors = { clusters, tissues };
+}
+
+function tissueMenuRank(tissue) {
+  const id = String(tissue.id || "").toLowerCase();
+  const label = String(tissue.label || "").toLowerCase();
+  const idIndex = TISSUE_MENU_ORDER.indexOf(id);
+  if (idIndex >= 0) return idIndex;
+  const labelIndex = TISSUE_MENU_ORDER.indexOf(label);
+  if (labelIndex >= 0) return labelIndex;
+  return TISSUE_MENU_ORDER.length;
 }
 
 function loadClusterMeta(payload) {
@@ -835,6 +913,10 @@ function loadClusterMeta(payload) {
   };
 
   els.clusterSelect.innerHTML = "";
+  const allOption = document.createElement("option");
+  allOption.value = "";
+  allOption.textContent = "All clusters";
+  els.clusterSelect.appendChild(allOption);
   for (const cluster of state.clusterMeta.clusters) {
     const option = document.createElement("option");
     option.value = String(cluster.id);
@@ -845,9 +927,7 @@ function loadClusterMeta(payload) {
   const hasSelectedCluster = state.clusterMeta.clusters.some(
     (cluster) => String(cluster.id) === state.selectedCluster
   );
-  state.selectedCluster = hasSelectedCluster
-    ? state.selectedCluster
-    : String(state.clusterMeta.clusters[0]?.id || "");
+  state.selectedCluster = hasSelectedCluster ? state.selectedCluster : "";
   els.clusterSelect.value = state.selectedCluster;
   els.clusterSelect.disabled = !state.clusterMeta.clusters.length;
 }
@@ -881,7 +961,15 @@ function loadTissueMeta(payload) {
     error: "",
   };
 
-  for (const tissue of state.tissueMeta.tissues) {
+  const allOption = document.createElement("option");
+  allOption.value = "";
+  allOption.textContent = "All tissues";
+  els.tissueSelect.appendChild(allOption);
+  const orderedTissues = state.tissueMeta.tissues
+    .map((tissue, index) => ({ tissue, index }))
+    .sort((a, b) => tissueMenuRank(a.tissue) - tissueMenuRank(b.tissue) || a.index - b.index)
+    .map((item) => item.tissue);
+  for (const tissue of orderedTissues) {
     const option = document.createElement("option");
     option.value = String(tissue.id);
     option.textContent = tissue.label || tissue.id;
@@ -891,9 +979,7 @@ function loadTissueMeta(payload) {
   const hasSelectedTissue = state.tissueMeta.tissues.some(
     (tissue) => String(tissue.id) === state.selectedTissue
   );
-  state.selectedTissue = hasSelectedTissue
-    ? state.selectedTissue
-    : String(state.tissueMeta.tissues[0]?.id || "");
+  state.selectedTissue = hasSelectedTissue ? state.selectedTissue : "";
   els.tissueSelect.value = state.selectedTissue;
   els.tissueSelect.disabled = !state.tissueMeta.tissues.length;
 }
@@ -1015,11 +1101,13 @@ function setDisplayMode(mode) {
 
 function setSelectedCluster(clusterId) {
   state.selectedCluster = clusterId || "";
+  els.clusterSelect.value = state.selectedCluster;
   setDisplayMode("cluster");
 }
 
 function setSelectedTissue(tissueId) {
   state.selectedTissue = tissueId || "";
+  els.tissueSelect.value = state.selectedTissue;
   setDisplayMode("tissue");
 }
 

@@ -17,6 +17,7 @@ STATIC_ROOT = WEB_ROOT / "static"
 DATA_ROOT = WEB_ROOT / "data"
 CACHE_ROOT = WEB_ROOT / "cache"
 DB_PATH = DATA_ROOT / "expression.sqlite"
+CATEGORY_COLORS_PATH = ROOT / "colors.txt"
 CACHE_VERSION = 2
 DOTPLOT_CLUSTER_COLUMN = "seurat_clusters"
 TISSUE_COLUMN = "celltype"
@@ -41,6 +42,59 @@ def json_response(handler, status, payload):
     handler.send_header("Cache-Control", "no-store")
     handler.end_headers()
     handler.wfile.write(body)
+
+
+def normalize_hex_color(value):
+    color = value.strip()
+    if len(color) == 7 and color[0] == "#":
+        digits = color[1:]
+    elif len(color) == 6:
+        digits = color
+        color = f"#{color}"
+    else:
+        return None
+
+    if all(char in "0123456789abcdefABCDEF" for char in digits):
+        return color.upper()
+    return None
+
+
+def load_category_colors():
+    payload = {
+        "formatVersion": 1,
+        "clusters": {},
+        "tissues": {},
+    }
+    if not CATEGORY_COLORS_PATH.exists():
+        return payload
+
+    section = None
+    for raw_line in CATEGORY_COLORS_PATH.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+
+        if line.startswith("#"):
+            heading = line.lstrip("#").strip().lower()
+            if "cluster" in heading:
+                section = "clusters"
+            elif "tissue" in heading:
+                section = "tissues"
+            continue
+
+        if section not in payload:
+            continue
+
+        try:
+            label, color_value = line.rsplit(None, 1)
+        except ValueError:
+            continue
+
+        color = normalize_hex_color(color_value)
+        if color is not None:
+            payload[section][label.strip()] = color
+
+    return payload
 
 
 def read_gene_names(csv_path):
@@ -379,6 +433,10 @@ class Handler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/genes":
             genes = get_gene_names()
             json_response(self, 200, {"genes": genes})
+            return
+
+        if parsed.path == "/api/colors":
+            json_response(self, 200, load_category_colors())
             return
 
         if parsed.path == "/api/replicates":

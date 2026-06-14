@@ -13,8 +13,8 @@
   - S1 以 `s1_rep1` 的 bbox 尺寸为显示基准。
   - S2 以 `s2_rep1` 的 bbox 尺寸为显示基准。
 - `Gene ID` 模式按表达量填充真实细胞轮廓，并用填充色的反色描边。
-- `Clusters` 模式高亮当前选中的 cluster，其他 cluster 显示为灰色。
-- `Tissues` 模式高亮当前选中的组织类型，其他组织显示为灰色。
+- `Clusters` 模式默认按 `colors.txt` 中的颜色显示全部 cluster；选择单个 cluster 后，其他 cluster 显示为灰色。
+- `Tissues` 模式默认按 `colors.txt` 中的颜色显示全部组织类型；选择单个组织类型后，其他组织显示为灰色。
 - 细胞轮廓线宽会随缩放动态变化：
   - 总览时轮廓变细，减少黑色/反色线条遮盖。
   - 放大后轮廓逐渐变粗，方便查看细胞边界。
@@ -42,6 +42,7 @@ web_viewer/data/
 
 说明：
 
+- 项目根目录 `colors.txt`：cluster 和 tissue 的颜色配置，运行时通过 `/api/colors` 读取。
 - `expression.sqlite`：运行时优先使用的表达量数据库，包含基因列表、每个样本/基因的表达范围、非零表达 cell，以及从 Rda 派生出的重复分组 JSON。也可包含 dotplot 表：`dotplot_clusters` 和 `dotplot_gene_cluster_stats`，以及组织信息表：`tissues` 和 `tissue_cell_assignments`。
 - `S1_cells.json` / `S2_cells.json`：每个 cell 的 bbox 和面积，是导出重复分组时使用的中间元数据。
 - `replicates.json`：从 Seurat 对象的 `orig.ident` 导出，记录每个重复包含的 cell id、bbox 和需要加载的轮廓 tile；作为 SQLite 建库输入，数据库缺失时回退使用。
@@ -165,7 +166,7 @@ python3 web_viewer/export_clusters.py \
   --out web_viewer/data/clusters.json
 ```
 
-该脚本读取 `st@meta.data$seurat_clusters`，并按 `replicates.json` 中已经分配到空间面板的 cell 输出 cluster 归属。网页启动时读取 `clusters.json`；在 `Display Mode` 选择 `Clusters` 后，可通过 cluster 下拉菜单高亮单个 cluster，其他 cluster 显示为灰色。
+该脚本读取 `st@meta.data$seurat_clusters`，并按 `replicates.json` 中已经分配到空间面板的 cell 输出 cluster 归属。网页启动时读取 `clusters.json`；在 `Display Mode` 选择 `Clusters` 后，默认显示全部 cluster 颜色，也可通过 cluster 下拉菜单高亮单个 cluster，其他 cluster 显示为灰色。
 
 7. 导入组织类型归属：
 
@@ -195,7 +196,7 @@ tissue_cell_assignments(
 )
 ```
 
-网页启动时通过 `/api/tissues` 读取组织列表和 cell 归属；在 `Display Mode` 选择 `Tissues` 后，可通过 tissue 下拉菜单高亮单个组织类型，其他组织显示为灰色。
+网页启动时通过 `/api/tissues` 读取组织列表和 cell 归属；在 `Display Mode` 选择 `Tissues` 后，默认显示全部组织类型颜色，也可通过 tissue 下拉菜单高亮单个组织类型，其他组织显示为灰色。
 
 当前项目已完成建库：
 
@@ -225,6 +226,7 @@ http://127.0.0.1:8000/
 /api/gene?gene=<gene_id>
 /api/dotplot?gene=<gene_id>
 /api/tissues
+/api/colors
 ```
 
 后端会：
@@ -238,6 +240,7 @@ http://127.0.0.1:8000/
 - `/api/dotplot` 只读取 SQLite。缺少 dotplot 表时返回明确错误，不影响 `/api/gene`。
 - `/api/dotplot` 返回 SQLite 中的 `avgExpr` 和 `pctExpr`，并额外返回 `avgExprScaled`。`avgExprScaled` 按 Seurat 默认 DotPlot 颜色口径计算：对当前基因各 cluster 的 `log1p(avgExpr)` 做 z-score，并 clamp 到 `[-2.5, 2.5]`。
 - `/api/tissues` 只读取 SQLite。缺少 tissue 表时返回明确错误，不影响空间图、基因查询或 cluster 高亮。
+- `/api/colors` 读取项目根目录 `colors.txt`，返回 cluster/tissue 的颜色映射；前端缺失某个颜色时会使用稳定的备用颜色。
 
 前端会：
 
