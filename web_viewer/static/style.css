@@ -24,7 +24,8 @@ body {
 }
 
 button,
-input {
+input,
+select {
   font: inherit;
 }
 
@@ -98,6 +99,21 @@ input {
   background: #fff;
 }
 
+select {
+  width: 100%;
+  height: 38px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--ink);
+  background: #fff;
+}
+
+select:disabled {
+  color: #98a2b3;
+  background: #f8fafc;
+}
+
 button {
   height: 38px;
   border: 1px solid var(--line);
@@ -126,6 +142,12 @@ button:hover {
 .sample-toggle {
   display: grid;
   grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.cluster-control,
+.tissue-control {
+  display: grid;
   gap: 8px;
 }
 
@@ -169,6 +191,16 @@ button:hover {
   border: 1px solid #d0b4aa;
   border-radius: 4px;
   background: linear-gradient(to top, #fff5f0, #fcbba1, #fb6a4a, #cb181d, #67000d);
+}
+
+.legend-bar.cluster-mode {
+  border-color: #9aa7b6;
+  background: linear-gradient(to top, #d6dbe2 0 48%, #1565c0 52% 100%);
+}
+
+.legend-bar.tissue-mode {
+  border-color: #9aa7b6;
+  background: linear-gradient(to top, #d6dbe2 0 48%, #2e7d32 52% 100%);
 }
 
 .legend-labels {

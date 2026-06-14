@@ -31,6 +31,20 @@
         <button type="button" data-sample="S2">S2</button>
       </div>
 
+      <div class="cluster-control">
+        <label for="clusterSelect">Cluster</label>
+        <select id="clusterSelect" disabled>
+          <option value="all">全部 cluster</option>
+        </select>
+      </div>
+
+      <div class="tissue-control">
+        <label for="tissueSelect">Tissue</label>
+        <select id="tissueSelect" disabled>
+          <option value="all">全部 tissue</option>
+        </select>
+      </div>
+
       <div class="stats">
         <div>
           <span>当前基因</span>
@@ -43,6 +57,14 @@
         <div>
           <span>细胞数</span>
           <strong id="cellCount">-</strong>
+        </div>
+        <div>
+          <span>Cluster</span>
+          <strong id="selectedCluster">全部</strong>
+        </div>
+        <div>
+          <span>Tissue</span>
+          <strong id="selectedTissue">全部</strong>
         </div>
         <div>
           <span>表达细胞</span>

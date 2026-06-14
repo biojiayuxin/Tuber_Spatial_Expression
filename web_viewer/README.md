@@ -28,6 +28,7 @@ web_viewer/data/
   S2_cells.json
   genes.json
   replicates.json
+  clusters.json
   contours/
     S1/
       manifest.json
@@ -39,12 +40,13 @@ web_viewer/data/
 
 说明：
 
-- `expression.sqlite`：运行时优先使用的表达量数据库，包含基因列表、每个样本/基因的表达范围、非零表达 cell，以及从 Rda 派生出的重复分组 JSON。也可包含 dotplot 表：`dotplot_clusters` 和 `dotplot_gene_cluster_stats`。
+- `expression.sqlite`：运行时优先使用的表达量数据库，包含基因列表、每个样本/基因的表达范围、非零表达 cell，以及从 Rda 派生出的重复分组 JSON。也可包含 dotplot 表：`dotplot_clusters` 和 `dotplot_gene_cluster_stats`，以及组织信息表：`tissues` 和 `tissue_cell_assignments`。
 - `S1_cells.json` / `S2_cells.json`：每个 cell 的 bbox 和面积，是导出重复分组时使用的中间元数据。
 - `replicates.json`：从 Seurat 对象的 `orig.ident` 导出，记录每个重复包含的 cell id、bbox 和需要加载的轮廓 tile；作为 SQLite 建库输入，数据库缺失时回退使用。
 - `contours/*/manifest.json`：轮廓 tile 索引。
 - `contours/*/tile_*.json`：真实细胞轮廓坐标。
 - `genes.json`：旧版基因列表缓存；SQLite 缺失时回退使用。
+- `clusters.json`：从 Seurat 对象的 `seurat_clusters` 导出的空间 cell cluster 归属，用于前端 cluster 下拉筛选和高亮。
 
 服务端运行时不会读取 `.npy` 或 `.Rda`。
 查询基因表达量时也不会扫描 `S1_all_genes.csv` / `S2_all_genes.csv`，除非 `expression.sqlite` 不存在或不可用。
@@ -152,12 +154,54 @@ dotplot 统计口径：
 - `expressing_count` 是 `data_slot_value > 0` 的细胞数。
 - 当前默认使用 Seurat 对象的默认 assay，本数据为 `SCT` assay 的 `data` layer/slot。
 
+6. 导出空间图 cluster 归属：
+
+```bash
+python3 web_viewer/export_clusters.py \
+  --rda seurat_object.02-dims64.res0.6.Rda \
+  --replicates-json web_viewer/data/replicates.json \
+  --out web_viewer/data/clusters.json
+```
+
+该脚本读取 `st@meta.data$seurat_clusters`，并按 `replicates.json` 中已经分配到空间面板的 cell 输出 cluster 归属。网页启动时读取 `clusters.json`，下拉菜单选择单个 cluster 后，空间图会高亮该 cluster，其他 cluster 显示为灰色。默认选择“全部 cluster”时仍显示基因表达量颜色。
+
+7. 导入组织类型归属：
+
+```bash
+python3 web_viewer/import_tissues.py \
+  --rda seurat_object.celltype.Rda \
+  --db web_viewer/data/expression.sqlite \
+  --tissue-column celltype
+```
+
+该步骤读取 `st@meta.data$celltype`，把每个空间 cell 的组织类型写入 SQLite：
+
+```sql
+tissues(
+  tissue_id TEXT PRIMARY KEY,
+  tissue_label TEXT NOT NULL,
+  tissue_order INTEGER NOT NULL,
+  cell_count INTEGER NOT NULL,
+  assigned_cell_count INTEGER NOT NULL
+)
+
+tissue_cell_assignments(
+  sample TEXT NOT NULL,
+  cell_id INTEGER NOT NULL,
+  tissue_id TEXT NOT NULL,
+  PRIMARY KEY (sample, cell_id)
+)
+```
+
+网页启动时通过 `/api/tissues` 读取组织列表和 cell 归属。Tissue 下拉选择单个组织后，空间图会高亮该组织，其他组织显示为灰色。默认选择“全部 tissue”时仍显示基因表达量颜色。
+
 当前项目已完成建库：
 
 - `web_viewer/data/expression.sqlite` 约 3.0 GB。
 - 基因数：27006。
 - S1：9993 个 cell，9,728,800 个非零表达值。
 - S2：50897 个 cell，58,662,697 个非零表达值。
+- Tissue：5 个组织类型，60,887 个空间 cell 组织归属。
 
 ## 启动服务
 
@@ -178,6 +222,7 @@ http://127.0.0.1:8000/
 ```text
 /api/gene?gene=<gene_id>
 /api/dotplot?gene=<gene_id>
+/api/tissues
 ```
 
 后端会：
@@ -190,6 +235,7 @@ http://127.0.0.1:8000/
 - CSV 回退路径会将查询结果缓存到 `web_viewer/cache/`。
 - `/api/dotplot` 只读取 SQLite。缺少 dotplot 表时返回明确错误，不影响 `/api/gene`。
 - `/api/dotplot` 返回 SQLite 中的 `avgExpr` 和 `pctExpr`，并额外返回 `avgExprScaled`。`avgExprScaled` 按 Seurat 默认 DotPlot 颜色口径计算：对当前基因各 cluster 的 `log1p(avgExpr)` 做 z-score，并 clamp 到 `[-2.5, 2.5]`。
+- `/api/tissues` 只读取 SQLite。缺少 tissue 表时返回明确错误，不影响空间图、基因查询或 cluster 高亮。
 
 前端会：
 
@@ -199,6 +245,7 @@ http://127.0.0.1:8000/
 - 使用表达量填充真实细胞轮廓。
 - 使用动态线宽绘制反色细胞轮廓。
 - 在空间图下方绘制单行 cluster dotplot：X 轴为 `seurat_clusters`，Y 轴为当前查询基因。切换 S1/S2 只影响空间图，不会改变 dotplot。
+- 在 Tissue 下拉菜单选择单个组织后，空间图高亮该组织；Cluster 和 Tissue 高亮模式互斥，选择其中一个时另一个会回到“全部”。
 - Dotplot 点颜色使用 `avgExprScaled`，对应 Seurat 默认的 scaled average expression。
 - Dotplot 点大小使用当前基因的动态百分比范围映射，而不是固定 `0-100%`：
   当前基因所有 cluster 的最小 `pctExpr` 映射到最小半径，最大 `pctExpr` 映射到最大半径，中间值线性插值。这样低表达基因也能显示 cluster 间的相对差异。

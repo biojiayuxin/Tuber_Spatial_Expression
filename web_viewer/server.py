@@ -19,6 +19,9 @@ CACHE_ROOT = WEB_ROOT / "cache"
 DB_PATH = DATA_ROOT / "expression.sqlite"
 CACHE_VERSION = 2
 DOTPLOT_CLUSTER_COLUMN = "seurat_clusters"
+TISSUE_COLUMN = "celltype"
+TISSUES_TABLE = "tissues"
+TISSUE_ASSIGNMENTS_TABLE = "tissue_cell_assignments"
 
 SAMPLES = {
     "S1": ROOT / "S1_all_genes.csv",
@@ -266,6 +269,78 @@ def load_dotplot_from_db(gene):
     }
 
 
+def load_tissues_from_db():
+    if not DB_PATH.exists():
+        raise RuntimeError("tissue database not found; build web_viewer/data/expression.sqlite first")
+
+    with connect_db() as conn:
+        if not (
+            db_table_exists(conn, TISSUES_TABLE)
+            and db_table_exists(conn, TISSUE_ASSIGNMENTS_TABLE)
+        ):
+            raise RuntimeError("tissue tables not found; run web_viewer/import_tissues.py")
+
+        tissue_column = get_metadata_value(conn, "tissue_column", TISSUE_COLUMN)
+        source = get_metadata_value(conn, "tissue_source", "")
+        tissue_rows = conn.execute(
+            f"""
+            SELECT
+              tissue_id,
+              tissue_label,
+              tissue_order,
+              cell_count,
+              assigned_cell_count
+            FROM {TISSUES_TABLE}
+            ORDER BY tissue_order, tissue_label
+            """
+        ).fetchall()
+        assignment_rows = conn.execute(
+            f"""
+            SELECT sample, cell_id, tissue_id
+            FROM {TISSUE_ASSIGNMENTS_TABLE}
+            ORDER BY sample, cell_id
+            """
+        ).fetchall()
+
+    samples = {}
+    for sample in SAMPLES:
+        samples[sample] = {
+            "sample": sample,
+            "assignedCellCount": 0,
+            "cells": [],
+        }
+
+    for sample, cell_id, tissue_id in assignment_rows:
+        sample_payload = samples.setdefault(
+            sample,
+            {
+                "sample": sample,
+                "assignedCellCount": 0,
+                "cells": [],
+            },
+        )
+        sample_payload["cells"].append([int(cell_id), str(tissue_id)])
+        sample_payload["assignedCellCount"] += 1
+
+    return {
+        "formatVersion": 1,
+        "source": source,
+        "tissueColumn": tissue_column,
+        "tissues": [
+            {
+                "id": str(tissue_id),
+                "label": str(tissue_label),
+                "order": int(tissue_order),
+                "cellCount": int(cell_count),
+                "assignedCellCount": int(assigned_cell_count),
+            }
+            for tissue_id, tissue_label, tissue_order, cell_count, assigned_cell_count
+            in tissue_rows
+        ],
+        "samples": samples,
+    }
+
+
 def get_json_document(name, fallback_path):
     if DB_PATH.exists():
         try:
@@ -312,6 +387,19 @@ class Handler(SimpleHTTPRequestHandler):
                 json_response(self, 404, {"error": "replicates not found"})
                 return
             json_response(self, 200, replicates)
+            return
+
+        if parsed.path == "/api/tissues":
+            try:
+                payload = load_tissues_from_db()
+            except RuntimeError as exc:
+                json_response(self, 503, {"error": str(exc)})
+                return
+            except sqlite3.Error as exc:
+                json_response(self, 500, {"error": f"tissue SQLite error: {exc}"})
+                return
+
+            json_response(self, 200, payload)
             return
 
         if parsed.path == "/api/gene":
