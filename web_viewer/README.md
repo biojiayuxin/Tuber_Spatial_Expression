@@ -1,6 +1,6 @@
 # Spatial Expression Web Viewer
 
-`web_viewer` 提供空间转录组表达量的本地网页查看器。当前版本使用真实细胞轮廓绘制，并按生物重复拆分展示样本。空间图下方显示当前基因在合并 `seurat_clusters` 上的单行 cluster dotplot。
+`web_viewer` 提供空间转录组表达量的本地网页查看器。当前版本使用真实细胞轮廓绘制，并按生物重复拆分展示样本。页面通过 `Display Mode` 在 `Gene ID`、`Clusters`、`Tissues` 三种互斥模式间切换；`Gene ID` 模式会在空间图下方显示当前基因在合并 `seurat_clusters` 上的单行 cluster dotplot。
 
 ## 当前显示方式
 
@@ -12,7 +12,9 @@
 - 同一样本内所有重复统一显示尺寸：
   - S1 以 `s1_rep1` 的 bbox 尺寸为显示基准。
   - S2 以 `s2_rep1` 的 bbox 尺寸为显示基准。
-- 每个细胞用真实轮廓填充表达量颜色，并用填充色的反色描边。
+- `Gene ID` 模式按表达量填充真实细胞轮廓，并用填充色的反色描边。
+- `Clusters` 模式高亮当前选中的 cluster，其他 cluster 显示为灰色。
+- `Tissues` 模式高亮当前选中的组织类型，其他组织显示为灰色。
 - 细胞轮廓线宽会随缩放动态变化：
   - 总览时轮廓变细，减少黑色/反色线条遮盖。
   - 放大后轮廓逐渐变粗，方便查看细胞边界。
@@ -163,7 +165,7 @@ python3 web_viewer/export_clusters.py \
   --out web_viewer/data/clusters.json
 ```
 
-该脚本读取 `st@meta.data$seurat_clusters`，并按 `replicates.json` 中已经分配到空间面板的 cell 输出 cluster 归属。网页启动时读取 `clusters.json`，下拉菜单选择单个 cluster 后，空间图会高亮该 cluster，其他 cluster 显示为灰色。默认选择“全部 cluster”时仍显示基因表达量颜色。
+该脚本读取 `st@meta.data$seurat_clusters`，并按 `replicates.json` 中已经分配到空间面板的 cell 输出 cluster 归属。网页启动时读取 `clusters.json`；在 `Display Mode` 选择 `Clusters` 后，可通过 cluster 下拉菜单高亮单个 cluster，其他 cluster 显示为灰色。
 
 7. 导入组织类型归属：
 
@@ -193,7 +195,7 @@ tissue_cell_assignments(
 )
 ```
 
-网页启动时通过 `/api/tissues` 读取组织列表和 cell 归属。Tissue 下拉选择单个组织后，空间图会高亮该组织，其他组织显示为灰色。默认选择“全部 tissue”时仍显示基因表达量颜色。
+网页启动时通过 `/api/tissues` 读取组织列表和 cell 归属；在 `Display Mode` 选择 `Tissues` 后，可通过 tissue 下拉菜单高亮单个组织类型，其他组织显示为灰色。
 
 当前项目已完成建库：
 
@@ -242,10 +244,11 @@ http://127.0.0.1:8000/
 - 根据当前视口按需加载轮廓 tile。
 - 根据 `/api/replicates` 返回的重复分组把 cell 放到对应重复面板。
 - 将每个重复的原始 bbox 拉伸到同一样本的统一面板尺寸。
-- 使用表达量填充真实细胞轮廓。
+- `Gene ID`、`Clusters`、`Tissues` 三种显示模式互斥，切换模式时只保留当前模式对应的控制项。
+- `Gene ID` 模式使用表达量填充真实细胞轮廓。
 - 使用动态线宽绘制反色细胞轮廓。
-- 在空间图下方绘制单行 cluster dotplot：X 轴为 `seurat_clusters`，Y 轴为当前查询基因。切换 S1/S2 只影响空间图，不会改变 dotplot。
-- 在 Tissue 下拉菜单选择单个组织后，空间图高亮该组织；Cluster 和 Tissue 高亮模式互斥，选择其中一个时另一个会回到“全部”。
+- 在 `Gene ID` 模式下，空间图下方绘制单行 cluster dotplot：X 轴为 `seurat_clusters`，Y 轴为当前查询基因。切换 S1/S2 只影响空间图，不会改变 dotplot。
+- `Clusters` 和 `Tissues` 模式会隐藏基因表达量图例和 dotplot。
 - Dotplot 点颜色使用 `avgExprScaled`，对应 Seurat 默认的 scaled average expression。
 - Dotplot 点大小使用当前基因的动态百分比范围映射，而不是固定 `0-100%`：
   当前基因所有 cluster 的最小 `pctExpr` 映射到最小半径，最大 `pctExpr` 映射到最大半径，中间值线性插值。这样低表达基因也能显示 cluster 间的相对差异。

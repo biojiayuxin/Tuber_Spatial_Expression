@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -10,90 +10,77 @@
   <div class="app">
     <aside class="sidebar">
       <div class="brand">
-        <div class="brand-mark"></div>
+        <img class="brand-mark" src="/assets/potato_icon.png" alt="" aria-hidden="true">
         <div>
           <h1>Spatial Expression</h1>
-          <p>空间转录组表达量查看器</p>
         </div>
       </div>
-
-      <form id="geneForm" class="search">
-        <label for="geneInput">Gene ID</label>
-        <div class="search-row">
-          <input id="geneInput" name="gene" type="search" value="Soltu.DM.03G024100" autocomplete="off" list="geneList">
-          <button type="submit">查询</button>
-        </div>
-        <datalist id="geneList"></datalist>
-      </form>
 
       <div class="sample-toggle" role="group" aria-label="Sample">
         <button type="button" data-sample="S1" class="active">S1</button>
         <button type="button" data-sample="S2">S2</button>
       </div>
 
-      <div class="cluster-control">
-        <label for="clusterSelect">Cluster</label>
-        <select id="clusterSelect" disabled>
-          <option value="all">全部 cluster</option>
+      <div class="mode-control">
+        <label for="modeSelect">Display Mode</label>
+        <select id="modeSelect">
+          <option value="gene">Gene ID</option>
+          <option value="cluster">Clusters</option>
+          <option value="tissue">Tissues</option>
         </select>
       </div>
 
-      <div class="tissue-control">
+      <form id="geneForm" class="search mode-panel" data-mode-panel="gene">
+        <label for="geneInput">Gene ID</label>
+        <div class="search-row">
+          <input id="geneInput" name="gene" type="search" value="Soltu.DM.03G024100" autocomplete="off" list="geneList">
+          <button type="submit">Search</button>
+        </div>
+        <datalist id="geneList"></datalist>
+      </form>
+
+      <div id="clusterPanel" class="cluster-control mode-panel is-hidden" data-mode-panel="cluster">
+        <label for="clusterSelect">Cluster</label>
+        <select id="clusterSelect" disabled>
+          <option value="">Loading...</option>
+        </select>
+      </div>
+
+      <div id="tissuePanel" class="tissue-control mode-panel is-hidden" data-mode-panel="tissue">
         <label for="tissueSelect">Tissue</label>
         <select id="tissueSelect" disabled>
-          <option value="all">全部 tissue</option>
+          <option value="">Loading...</option>
         </select>
       </div>
 
       <div class="stats">
         <div>
-          <span>当前基因</span>
-          <strong id="currentGene">-</strong>
-        </div>
-        <div>
-          <span>样本</span>
+          <span>Sample</span>
           <strong id="currentSample">S1</strong>
         </div>
         <div>
-          <span>细胞数</span>
+          <span>Cells</span>
           <strong id="cellCount">-</strong>
         </div>
-        <div>
-          <span>Cluster</span>
-          <strong id="selectedCluster">全部</strong>
-        </div>
-        <div>
-          <span>Tissue</span>
-          <strong id="selectedTissue">全部</strong>
-        </div>
-        <div>
-          <span>表达细胞</span>
-          <strong id="nonzeroCount">-</strong>
-        </div>
-        <div>
-          <span>表达范围</span>
-          <strong id="rangeText">-</strong>
-        </div>
       </div>
 
-      <div class="legend">
-        <div class="legend-bar"></div>
-        <div class="legend-labels">
-          <span id="legendMax">max</span>
-          <span id="legendMin">0</span>
-        </div>
-      </div>
-
-      <div id="status" class="status">加载空间坐标中...</div>
+      <div id="status" class="status">Loading spatial coordinates...</div>
     </aside>
 
     <main class="viewer">
       <section class="spatial-stage" aria-label="Spatial expression plot">
         <div class="toolbar">
-          <button type="button" id="zoomIn" title="放大">+</button>
-          <button type="button" id="zoomOut" title="缩小">-</button>
-          <button type="button" id="resetView" title="重置视图">重置</button>
+          <button type="button" id="zoomIn" title="Zoom in">+</button>
+          <button type="button" id="zoomOut" title="Zoom out">-</button>
+          <button type="button" id="resetView" title="Reset view">Reset</button>
           <span id="scaleText">100%</span>
+        </div>
+        <div class="legend">
+          <div class="legend-labels">
+            <span id="legendMin">0</span>
+            <span id="legendMax">max</span>
+          </div>
+          <div class="legend-bar"></div>
         </div>
         <canvas id="plot"></canvas>
       </section>

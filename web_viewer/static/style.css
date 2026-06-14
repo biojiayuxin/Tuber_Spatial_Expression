@@ -51,12 +51,11 @@ select {
 }
 
 .brand-mark {
-  width: 34px;
-  height: 34px;
-  border-radius: 8px;
-  background:
-    linear-gradient(135deg, #1565c0 0 45%, transparent 45%),
-    linear-gradient(315deg, #c62828 0 48%, #f1b44c 48%);
+  display: block;
+  width: 42px;
+  height: 42px;
+  object-fit: contain;
+  flex: 0 0 auto;
 }
 
 h1 {
@@ -72,6 +71,7 @@ p {
   font-size: 13px;
 }
 
+.mode-control,
 .search {
   display: grid;
   gap: 8px;
@@ -97,6 +97,10 @@ input {
   border-radius: 6px;
   color: var(--ink);
   background: #fff;
+}
+
+input::-webkit-calendar-picker-indicator {
+  display: none !important;
 }
 
 select {
@@ -151,6 +155,10 @@ button:hover {
   gap: 8px;
 }
 
+.mode-panel.is-hidden {
+  display: none;
+}
+
 .stats {
   display: grid;
   gap: 10px;
@@ -178,35 +186,36 @@ button:hover {
 }
 
 .legend {
+  position: absolute;
+  z-index: 2;
+  left: 18px;
+  bottom: 18px;
   display: grid;
-  grid-template-columns: 18px minmax(0, 1fr);
-  gap: 10px;
-  align-items: stretch;
-  min-height: 120px;
-  padding-top: 8px;
-  border-top: 1px solid var(--line);
+  grid-template-rows: auto 12px;
+  gap: 6px;
+  width: min(196px, calc(100% - 36px));
+  padding: 9px 10px 10px;
+  border: 1px solid rgba(102, 112, 133, 0.24);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 6px 24px rgba(16, 24, 40, 0.12);
+  pointer-events: none;
+}
+
+.legend.is-hidden {
+  display: none;
 }
 
 .legend-bar {
   border: 1px solid #d0b4aa;
   border-radius: 4px;
-  background: linear-gradient(to top, #fff5f0, #fcbba1, #fb6a4a, #cb181d, #67000d);
-}
-
-.legend-bar.cluster-mode {
-  border-color: #9aa7b6;
-  background: linear-gradient(to top, #d6dbe2 0 48%, #1565c0 52% 100%);
-}
-
-.legend-bar.tissue-mode {
-  border-color: #9aa7b6;
-  background: linear-gradient(to top, #d6dbe2 0 48%, #2e7d32 52% 100%);
+  background: linear-gradient(to right, #fff5f0, #fcbba1, #fb6a4a, #cb181d, #67000d);
 }
 
 .legend-labels {
   display: flex;
-  flex-direction: column;
   justify-content: space-between;
+  gap: 12px;
   color: var(--muted);
   font-size: 12px;
 }
@@ -232,6 +241,14 @@ button:hover {
   min-height: 100vh;
   overflow: hidden;
   background: #eef1f4;
+}
+
+.viewer.dotplot-hidden {
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.viewer.dotplot-hidden .dotplot-stage {
+  display: none;
 }
 
 .spatial-stage {

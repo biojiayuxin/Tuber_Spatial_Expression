@@ -18,8 +18,9 @@ const state = {
   expressions: {},
   clusterMeta: { clusters: [], maps: {} },
   tissueMeta: { tissues: [], maps: {}, error: "" },
-  selectedCluster: "all",
-  selectedTissue: "all",
+  displayMode: "gene",
+  selectedCluster: "",
+  selectedTissue: "",
   currentSample: "S1",
   currentGene: "",
   expressionRange: { vmin: 0, vmax: 0 },
@@ -37,16 +38,14 @@ const els = {
   input: document.getElementById("geneInput"),
   geneList: document.getElementById("geneList"),
   status: document.getElementById("status"),
-  currentGene: document.getElementById("currentGene"),
+  modeSelect: document.getElementById("modeSelect"),
+  modePanels: document.querySelectorAll("[data-mode-panel]"),
+  viewer: document.querySelector(".viewer"),
   currentSample: document.getElementById("currentSample"),
   cellCount: document.getElementById("cellCount"),
-  selectedCluster: document.getElementById("selectedCluster"),
-  selectedTissue: document.getElementById("selectedTissue"),
   clusterSelect: document.getElementById("clusterSelect"),
   tissueSelect: document.getElementById("tissueSelect"),
-  nonzeroCount: document.getElementById("nonzeroCount"),
-  rangeText: document.getElementById("rangeText"),
-  legendBar: document.querySelector(".legend-bar"),
+  legend: document.querySelector(".legend"),
   legendMax: document.getElementById("legendMax"),
   legendMin: document.getElementById("legendMin"),
   scaleText: document.getElementById("scaleText"),
@@ -232,19 +231,18 @@ function currentTissueMap() {
 }
 
 function selectedClusterLabel() {
-  if (state.selectedCluster === "all") return "全部";
-  return `Cluster ${state.selectedCluster}`;
+  return state.selectedCluster ? `Cluster ${state.selectedCluster}` : "Cluster";
 }
 
 function selectedTissueLabel() {
-  if (state.selectedTissue === "all") return "全部";
+  if (!state.selectedTissue) return "Tissue";
   const tissue = state.tissueMeta.tissues.find((item) => String(item.id) === state.selectedTissue);
   return tissue ? tissue.label || tissue.id : state.selectedTissue;
 }
 
 function activeHighlightMode() {
-  if (state.selectedCluster !== "all") return "cluster";
-  if (state.selectedTissue !== "all") return "tissue";
+  if (state.displayMode === "cluster") return "cluster";
+  if (state.displayMode === "tissue") return "tissue";
   return "expression";
 }
 
@@ -392,7 +390,7 @@ async function loadTile(spatial, key) {
   spatial.loadingTiles.add(key);
   try {
     const response = await fetch(tile.url);
-    if (!response.ok) throw new Error(`无法加载轮廓块 ${tile.url}`);
+    if (!response.ok) throw new Error(`Failed to load contour tile ${tile.url}`);
     const payload = await response.json();
     spatial.loadedTiles.set(key, payload);
   } catch (error) {
@@ -426,13 +424,13 @@ function translatedBBox(cell, panel) {
 }
 
 function cellFillColor(cell, expression, clusterMap, tissueMap) {
-  if (state.selectedCluster !== "all") {
+  if (state.displayMode === "cluster") {
     return clusterMap.get(cell.id) === state.selectedCluster
       ? CLUSTER_HIGHLIGHT
       : CLUSTER_MUTED;
   }
 
-  if (state.selectedTissue !== "all") {
+  if (state.displayMode === "tissue") {
     return tissueMap.get(cell.id) === state.selectedTissue
       ? TISSUE_HIGHLIGHT
       : TISSUE_MUTED;
@@ -558,13 +556,13 @@ function draw() {
 
   updateScaleText();
   if (missingTiles > 0) {
-    setStatus(`加载 ${spatial.sample} 轮廓块 ${spatial.loadedTiles.size}/${spatial.tileCount}...`);
-  } else if (state.selectedCluster !== "all") {
-    setStatus(`已显示 ${selectedClusterLabel()}，当前视图绘制 ${drawnCells.toLocaleString()} 个细胞`);
-  } else if (state.selectedTissue !== "all") {
-    setStatus(`已显示 ${selectedTissueLabel()}，当前视图绘制 ${drawnCells.toLocaleString()} 个细胞`);
+    setStatus(`Loading ${spatial.sample} contour tiles ${spatial.loadedTiles.size}/${spatial.tileCount}...`);
+  } else if (state.displayMode === "cluster") {
+    setStatus(`Showing ${selectedClusterLabel()}; ${drawnCells.toLocaleString()} cells drawn in the current view`);
+  } else if (state.displayMode === "tissue") {
+    setStatus(`Showing ${selectedTissueLabel()}; ${drawnCells.toLocaleString()} cells drawn in the current view`);
   } else if (state.currentGene) {
-    setStatus(`已加载 ${state.currentGene}，当前视图绘制 ${drawnCells.toLocaleString()} 个细胞`);
+    setStatus(`Loaded ${state.currentGene}; ${drawnCells.toLocaleString()} cells drawn in the current view`);
   }
 }
 
@@ -674,8 +672,12 @@ function drawDotplot() {
   dotCtx.setTransform(state.devicePixelRatio, 0, 0, state.devicePixelRatio, 0, 0);
   dotCtx.clearRect(0, 0, rect.width, rect.height);
 
+  if (state.displayMode !== "gene") {
+    return;
+  }
+
   if (state.dotplot.loading) {
-    drawDotplotMessage(rect, "加载 cluster dotplot...");
+    drawDotplotMessage(rect, "Loading cluster dotplot...");
     return;
   }
   if (state.dotplot.error) {
@@ -686,7 +688,7 @@ function drawDotplot() {
   const payload = state.dotplot.payload;
   const clusters = payload ? payload.clusters || [] : [];
   if (!clusters.length) {
-    drawDotplotMessage(rect, "暂无 dotplot 数据");
+    drawDotplotMessage(rect, "No dotplot data");
     return;
   }
 
@@ -777,32 +779,32 @@ function drawDotplot() {
 
 async function loadSpatial() {
   if (typeof Path2D === "undefined") {
-    throw new Error("当前浏览器不支持 Path2D，无法绘制细胞轮廓");
+    throw new Error("This browser does not support Path2D, so cell contours cannot be rendered");
   }
 
-  setStatus("加载 S1/S2 轮廓、重复索引、cluster 和 tissue 信息...");
+  setStatus("Loading S1/S2 contours, replicate indexes, cluster data, and tissue data...");
   const tissueRequest = fetch("/api/tissues").then(async (response) => {
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
-      return { error: payload.error || "tissue 信息不可用" };
+      return { error: payload.error || "Tissue data unavailable" };
     }
     return payload;
   });
   const [s1, s2, replicates, clusters, tissues] = await Promise.all([
     fetch("/data/contours/S1/manifest.json").then((response) => {
-      if (!response.ok) throw new Error("缺少 S1 轮廓数据，请先运行 web_viewer/export_contours.py");
+      if (!response.ok) throw new Error("Missing S1 contour data; run web_viewer/export_contours.py first");
       return response.json();
     }),
     fetch("/data/contours/S2/manifest.json").then((response) => {
-      if (!response.ok) throw new Error("缺少 S2 轮廓数据，请先运行 web_viewer/export_contours.py");
+      if (!response.ok) throw new Error("Missing S2 contour data; run web_viewer/export_contours.py first");
       return response.json();
     }),
     fetch("/api/replicates").then((response) => {
-      if (!response.ok) throw new Error("缺少重复信息，请先运行 web_viewer/export_replicates.py");
+      if (!response.ok) throw new Error("Missing replicate data; run web_viewer/export_replicates.py first");
       return response.json();
     }),
     fetch("/data/clusters.json").then((response) => {
-      if (!response.ok) throw new Error("缺少 cluster 信息，请先运行 web_viewer/export_clusters.py");
+      if (!response.ok) throw new Error("Missing cluster data; run web_viewer/export_clusters.py first");
       return response.json();
     }),
     tissueRequest,
@@ -833,11 +835,6 @@ function loadClusterMeta(payload) {
   };
 
   els.clusterSelect.innerHTML = "";
-  const allOption = document.createElement("option");
-  allOption.value = "all";
-  allOption.textContent = "全部 cluster";
-  els.clusterSelect.appendChild(allOption);
-
   for (const cluster of state.clusterMeta.clusters) {
     const option = document.createElement("option");
     option.value = String(cluster.id);
@@ -845,18 +842,26 @@ function loadClusterMeta(payload) {
     els.clusterSelect.appendChild(option);
   }
 
-  els.clusterSelect.disabled = false;
+  const hasSelectedCluster = state.clusterMeta.clusters.some(
+    (cluster) => String(cluster.id) === state.selectedCluster
+  );
+  state.selectedCluster = hasSelectedCluster
+    ? state.selectedCluster
+    : String(state.clusterMeta.clusters[0]?.id || "");
+  els.clusterSelect.value = state.selectedCluster;
+  els.clusterSelect.disabled = !state.clusterMeta.clusters.length;
 }
 
 function loadTissueMeta(payload) {
   els.tissueSelect.innerHTML = "";
-  const allOption = document.createElement("option");
-  allOption.value = "all";
-  allOption.textContent = "全部 tissue";
-  els.tissueSelect.appendChild(allOption);
 
   if (payload && payload.error) {
     state.tissueMeta = { tissues: [], maps: {}, error: payload.error };
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = "Tissue unavailable";
+    els.tissueSelect.appendChild(option);
+    state.selectedTissue = "";
     els.tissueSelect.disabled = true;
     return;
   }
@@ -883,6 +888,13 @@ function loadTissueMeta(payload) {
     els.tissueSelect.appendChild(option);
   }
 
+  const hasSelectedTissue = state.tissueMeta.tissues.some(
+    (tissue) => String(tissue.id) === state.selectedTissue
+  );
+  state.selectedTissue = hasSelectedTissue
+    ? state.selectedTissue
+    : String(state.tissueMeta.tissues[0]?.id || "");
+  els.tissueSelect.value = state.selectedTissue;
   els.tissueSelect.disabled = !state.tissueMeta.tissues.length;
 }
 
@@ -923,9 +935,9 @@ async function queryGene(gene) {
   gene = gene.trim();
   if (!gene) return;
 
-  setStatus(`查询 ${gene} 表达量和 cluster dotplot...`);
   state.dotplot = { payload: null, error: "", loading: true };
-  requestDotplotDraw();
+  setDisplayMode("gene");
+  setStatus(`Querying ${gene} expression and cluster dotplot...`);
 
   const encodedGene = encodeURIComponent(gene);
   const [geneResponse, dotplotResponse] = await Promise.all([
@@ -937,9 +949,9 @@ async function queryGene(gene) {
 
   state.dotplot.loading = false;
   if (!geneResponse.ok) {
-    state.dotplot = { payload: null, error: "等待有效基因", loading: false };
+    state.dotplot = { payload: null, error: "Waiting for a valid gene", loading: false };
     requestDotplotDraw();
-    setStatus(payload.error || "查询失败");
+    setStatus(payload.error || "Query failed");
     return;
   }
 
@@ -952,7 +964,7 @@ async function queryGene(gene) {
   } else {
     state.dotplot = {
       payload: null,
-      error: dotplotPayload.error || "dotplot 数据不可用",
+      error: dotplotPayload.error || "Dotplot data unavailable",
       loading: false,
     };
   }
@@ -963,21 +975,22 @@ async function queryGene(gene) {
 
 function updateStats() {
   const spatial = currentSpatial();
-  const expression = currentExpression();
   const { vmin, vmax } = state.expressionRange;
   const highlightMode = activeHighlightMode();
-  els.currentGene.textContent = state.currentGene || "-";
   els.currentSample.textContent = spatial ? `${state.currentSample} (${spatial.panels.length} reps)` : state.currentSample;
   els.cellCount.textContent = spatial ? spatial.assignedCellCount.toLocaleString() : "-";
-  els.selectedCluster.textContent = selectedClusterLabel();
-  els.selectedTissue.textContent = selectedTissueLabel();
-  els.nonzeroCount.textContent = expression.nonzero ? expression.nonzero.toLocaleString() : "0";
-  els.rangeText.textContent = vmax ? `${formatNumber(vmin)} - ${formatNumber(vmax)}` : "-";
-  els.legendBar.classList.toggle("cluster-mode", highlightMode === "cluster");
-  els.legendBar.classList.toggle("tissue-mode", highlightMode === "tissue");
-  els.legendMax.textContent = highlightMode === "expression" ? (vmax ? formatNumber(vmax) : "max") : "选中";
-  els.legendMin.textContent = highlightMode === "expression" ? (Number.isFinite(vmin) ? formatNumber(vmin) : "0") : "其他";
+  els.legend.classList.toggle("is-hidden", highlightMode !== "expression");
+  els.legendMax.textContent = vmax ? formatNumber(vmax) : "max";
+  els.legendMin.textContent = Number.isFinite(vmin) ? formatNumber(vmin) : "0";
   updateScaleText();
+}
+
+function updateModeControls() {
+  els.modeSelect.value = state.displayMode;
+  els.modePanels.forEach((panel) => {
+    panel.classList.toggle("is-hidden", panel.dataset.modePanel !== state.displayMode);
+  });
+  els.viewer.classList.toggle("dotplot-hidden", state.displayMode !== "gene");
 }
 
 function setSample(sample) {
@@ -990,34 +1003,24 @@ function setSample(sample) {
   requestDraw();
 }
 
-function setSelectedCluster(clusterId) {
-  state.selectedCluster = clusterId || "all";
-  if (els.clusterSelect.value !== state.selectedCluster) {
-    els.clusterSelect.value = state.selectedCluster;
-  }
-  if (state.selectedCluster !== "all") {
-    state.selectedTissue = "all";
-    if (els.tissueSelect.value !== "all") {
-      els.tissueSelect.value = "all";
-    }
-  }
+function setDisplayMode(mode) {
+  state.displayMode = ["gene", "cluster", "tissue"].includes(mode) ? mode : "gene";
+  updateModeControls();
+  resizeCanvas();
+  fitView();
   updateStats();
   requestDraw();
+  requestDotplotDraw();
+}
+
+function setSelectedCluster(clusterId) {
+  state.selectedCluster = clusterId || "";
+  setDisplayMode("cluster");
 }
 
 function setSelectedTissue(tissueId) {
-  state.selectedTissue = tissueId || "all";
-  if (els.tissueSelect.value !== state.selectedTissue) {
-    els.tissueSelect.value = state.selectedTissue;
-  }
-  if (state.selectedTissue !== "all") {
-    state.selectedCluster = "all";
-    if (els.clusterSelect.value !== "all") {
-      els.clusterSelect.value = "all";
-    }
-  }
-  updateStats();
-  requestDraw();
+  state.selectedTissue = tissueId || "";
+  setDisplayMode("tissue");
 }
 
 function zoomAt(factor, centerX = canvas.clientWidth / 2, centerY = canvas.clientHeight / 2) {
@@ -1037,6 +1040,10 @@ els.form.addEventListener("submit", (event) => {
 
 document.querySelectorAll(".sample-toggle button").forEach((button) => {
   button.addEventListener("click", () => setSample(button.dataset.sample));
+});
+
+els.modeSelect.addEventListener("change", () => {
+  setDisplayMode(els.modeSelect.value);
 });
 
 els.clusterSelect.addEventListener("change", () => {
