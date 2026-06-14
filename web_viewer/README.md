@@ -1,6 +1,19 @@
 # Spatial Expression Web Viewer
 
-`web_viewer` 提供空间转录组表达量的本地网页查看器。当前版本使用真实细胞轮廓绘制，并按生物重复拆分展示样本。页面通过 `Display Mode` 在 `Gene ID`、`Clusters`、`Tissues` 三种互斥模式间切换；`Gene ID` 模式会在空间图下方显示当前基因在合并 `seurat_clusters` 上的单行 cluster dotplot。
+`web_viewer` 提供空间转录组表达量的本地网页查看器。当前版本使用统一入口展示多套数据集，用户可在页面左侧 `Dataset` 中切换 `S1 + S2` 或 `S1 + Stem`。页面通过 `Display Mode` 在 `Gene ID`、`Clusters`、`Tissues` 三种互斥模式间切换；`Gene ID` 模式会在空间图下方显示当前基因在合并 `seurat_clusters` 上的单行 cluster dotplot。
+
+数据集配置写在 `web_viewer/datasets.json`。默认入口仍是：
+
+```text
+http://127.0.0.1:8000/
+```
+
+也可以用 URL 直接打开指定数据集：
+
+```text
+http://127.0.0.1:8000/?dataset=s1_s2
+http://127.0.0.1:8000/?dataset=s1_stem
+```
 
 ## 当前显示方式
 
@@ -38,12 +51,23 @@ web_viewer/data/
     S2/
       manifest.json
       tile_*.json
+
+web_viewer/datasets/
+  s1_stem/
+    expression.sqlite
+    Stem_cells.json
+    replicates.json
+    clusters.json
+    contours/
+      Stem/
+        manifest.json
+        tile_*.json
 ```
 
 说明：
 
 - 项目根目录 `colors.txt`：cluster 和 tissue 的颜色配置，运行时通过 `/api/colors` 读取。
-- `expression.sqlite`：运行时优先使用的表达量数据库，包含基因列表、每个样本/基因的表达范围、非零表达 cell，以及从 Rda 派生出的重复分组 JSON。也可包含 dotplot 表：`dotplot_clusters` 和 `dotplot_gene_cluster_stats`，以及组织信息表：`tissues` 和 `tissue_cell_assignments`。
+- `expression.sqlite`：运行时优先使用的表达量数据库，包含基因列表、每个样本/基因的表达范围、非零表达 cell，以及从 Rda 派生出的重复分组 JSON。也可包含 dotplot 表：`dotplot_clusters` 和 `dotplot_gene_cluster_stats`，以及组织信息表：`tissues` 和 `tissue_cell_assignments`。每套数据集使用自己的 SQLite。
 - `S1_cells.json` / `S2_cells.json`：每个 cell 的 bbox 和面积，是导出重复分组时使用的中间元数据。
 - `replicates.json`：从 Seurat 对象的 `orig.ident` 导出，记录每个重复包含的 cell id、bbox 和需要加载的轮廓 tile；作为 SQLite 建库输入，数据库缺失时回退使用。
 - `contours/*/manifest.json`：轮廓 tile 索引。
@@ -206,6 +230,90 @@ tissue_cell_assignments(
 - S2：50897 个 cell，58,662,697 个非零表达值。
 - Tissue：5 个组织类型，60,887 个空间 cell 组织归属。
 
+当前也已生成 `S1 + Stem` 数据集：
+
+- `web_viewer/datasets/s1_stem/expression.sqlite` 约 493 MB。
+- 基因数：23821，来源为 `data_for_S1_Stem/tissues.seurat_object.celltype_stem.Rda` 的 `SCT` assay `data` slot。
+- S1：9993 个 cell，6,301,768 个非零表达值。
+- Stem：9893 个 cell，4,400,660 个非零表达值。
+- Cluster：16 个 `seurat_clusters`。
+- Tissue：4 个组织类型，19,886 个空间 cell 组织归属。
+
+`S1 + Stem` 的 Stem 轮廓来自 `data_for_S1_Stem/stem_cells.npy`；S1 轮廓复用 `web_viewer/data/contours/S1`。
+
+重建 `S1 + Stem` 数据集的关键命令：
+
+```bash
+python3 web_viewer/export_rda_cell_ids.py \
+  --rda data_for_S1_Stem/tissues.seurat_object.celltype_stem.Rda \
+  --object-name stem_temp \
+  --rep-prefix stem_ \
+  --out web_viewer/datasets/s1_stem/tmp/stem_cell_ids.csv
+
+python3 web_viewer/export_cells.py \
+  --mask data_for_S1_Stem/stem_cells.npy \
+  --cell-ids web_viewer/datasets/s1_stem/tmp/stem_cell_ids.csv \
+  --sample Stem \
+  --out web_viewer/datasets/s1_stem/Stem_cells.json
+
+python3 web_viewer/export_contours.py \
+  --mask data_for_S1_Stem/stem_cells.npy \
+  --cell-ids web_viewer/datasets/s1_stem/tmp/stem_cell_ids.csv \
+  --sample Stem \
+  --out-dir web_viewer/datasets/s1_stem/contours/Stem \
+  --url-prefix /dataset-data/s1_stem
+
+python3 web_viewer/export_replicates.py \
+  --rda data_for_S1_Stem/tissues.seurat_object.celltype_stem.Rda \
+  --object-name stem_temp \
+  --sample S1=web_viewer/data/S1_cells.json \
+  --sample Stem=web_viewer/datasets/s1_stem/Stem_cells.json \
+  --sample-rule S1=s1_ \
+  --sample-rule Stem=stem_ \
+  --contours-root web_viewer/datasets/s1_stem/contours \
+  --out web_viewer/datasets/s1_stem/replicates.json
+
+python3 web_viewer/build_expression_db_from_rda.py \
+  --rda data_for_S1_Stem/tissues.seurat_object.celltype_stem.Rda \
+  --object-name stem_temp \
+  --assay SCT \
+  --layer data \
+  --sample-rule S1=s1_ \
+  --sample-rule Stem=stem_ \
+  --replicates-json web_viewer/datasets/s1_stem/replicates.json \
+  --out web_viewer/datasets/s1_stem/expression.sqlite \
+  --replace
+
+python3 web_viewer/export_clusters.py \
+  --rda data_for_S1_Stem/clusters.seurat_object.dims49.res0.8.Rda \
+  --object-name stem_temp \
+  --cluster-column seurat_clusters \
+  --replicates-json web_viewer/datasets/s1_stem/replicates.json \
+  --sample-rule S1=s1_ \
+  --sample-rule Stem=stem_ \
+  --out web_viewer/datasets/s1_stem/clusters.json
+
+python3 web_viewer/import_tissues.py \
+  --rda data_for_S1_Stem/tissues.seurat_object.celltype_stem.Rda \
+  --object-name stem_temp \
+  --tissue-column celltype \
+  --replicates-json web_viewer/datasets/s1_stem/replicates.json \
+  --sample-rule S1=s1_ \
+  --sample-rule Stem=stem_ \
+  --db web_viewer/datasets/s1_stem/expression.sqlite
+
+python3 web_viewer/import_dotplot_stats.py \
+  --rda data_for_S1_Stem/clusters.seurat_object.dims49.res0.8.Rda \
+  --object-name stem_temp \
+  --db web_viewer/datasets/s1_stem/expression.sqlite \
+  --cluster-column seurat_clusters \
+  --assay SCT \
+  --layer data \
+  --expect-cells 19886 \
+  --expect-clusters 16 \
+  --replace
+```
+
 ## 启动服务
 
 ```bash
@@ -223,8 +331,9 @@ http://127.0.0.1:8000/
 查询基因时，前端请求：
 
 ```text
-/api/gene?gene=<gene_id>
-/api/dotplot?gene=<gene_id>
+/api/datasets
+/api/gene?dataset=<dataset_id>&gene=<gene_id>
+/api/dotplot?dataset=<dataset_id>&gene=<gene_id>
 /api/tissues
 /api/colors
 ```

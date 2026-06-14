@@ -16,6 +16,7 @@ web_viewer/cache/
 web_viewer/data/expression.sqlite
 web_viewer/data/*.sqlite
 web_viewer/data/*.sqlite-*
+web_viewer/datasets/
 
 # Local logs and temporary files
 *.log

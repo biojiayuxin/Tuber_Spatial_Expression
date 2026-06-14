@@ -21,6 +21,24 @@ def load_expr_cell_ids(expr_csv):
     return ids
 
 
+def load_cell_ids(path):
+    ids = set()
+    with open(path, newline="") as handle:
+        reader = csv.reader(handle)
+        header = next(reader)
+        if header and header[0] in {"cell", "cell_id", "id"}:
+            for row in reader:
+                if row:
+                    ids.add(int(row[0]))
+        else:
+            if header:
+                ids.add(int(header[0]))
+            for row in reader:
+                if row:
+                    ids.add(int(row[0]))
+    return ids
+
+
 def contour_mode(name):
     if name == "none":
         return cv2.CHAIN_APPROX_NONE
@@ -58,13 +76,13 @@ def encode_contours(mask, cell_id, bbox, mode):
     return encoded
 
 
-def export_contours(mask_path, expr_csv, sample, out_dir, tile_size, chain):
+def export_contours(mask_path, expr_csv, sample, out_dir, tile_size, chain, cell_ids=None, url_prefix="/data"):
     mask = np.load(mask_path, mmap_mode="r")
     if mask.ndim != 2:
         raise ValueError(f"{mask_path} must be a 2D label mask, got shape {mask.shape}")
 
     height, width = mask.shape
-    expr_ids = load_expr_cell_ids(expr_csv)
+    expr_ids = set(range(1, int(mask.max()) + 1)) if cell_ids is None else set(cell_ids)
     objects = find_objects(mask)
     mode = contour_mode(chain)
 
@@ -130,7 +148,7 @@ def export_contours(mask_path, expr_csv, sample, out_dir, tile_size, chain):
         tile_entries.append({
             "x": int(tx),
             "y": int(ty),
-            "url": f"/data/contours/{sample}/{filename}",
+            "url": f"{url_prefix.rstrip('/')}/contours/{sample}/{filename}",
             "count": len(tiles[(tx, ty)]),
             "bounds": [
                 int(tx * tile_size),
@@ -176,12 +194,24 @@ def main():
         description="Export tiled cell contour JSON from a labelled cells.npy mask."
     )
     parser.add_argument("--mask", required=True)
-    parser.add_argument("--expr", required=True)
+    parser.add_argument("--expr")
+    parser.add_argument("--cell-ids")
+    parser.add_argument("--all-labels", action="store_true")
     parser.add_argument("--sample", required=True)
     parser.add_argument("--out-dir", required=True)
+    parser.add_argument("--url-prefix", default="/data")
     parser.add_argument("--tile-size", type=int, default=2048)
     parser.add_argument("--chain", choices=["simple", "none"], default="simple")
     args = parser.parse_args()
+
+    if args.cell_ids:
+        cell_ids = load_cell_ids(args.cell_ids)
+    elif args.expr:
+        cell_ids = load_expr_cell_ids(args.expr)
+    elif args.all_labels:
+        cell_ids = None
+    else:
+        raise ValueError("Provide --expr, --cell-ids, or --all-labels")
 
     export_contours(
         args.mask,
@@ -190,6 +220,8 @@ def main():
         args.out_dir,
         args.tile_size,
         args.chain,
+        cell_ids,
+        args.url_prefix,
     )
 
 

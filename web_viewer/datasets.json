@@ -1,0 +1,48 @@
+{
+  "defaultDataset": "s1_s2",
+  "datasets": [
+    {
+      "id": "s1_s2",
+      "label": "S1 + S2",
+      "dataRoot": "data",
+      "dataPath": "/data",
+      "defaultSample": "S1",
+      "defaultGene": "Soltu.DM.03G024100",
+      "samples": [
+        {
+          "id": "S1",
+          "label": "S1",
+          "csv": "S1_all_genes.csv",
+          "columns": 4
+        },
+        {
+          "id": "S2",
+          "label": "S2",
+          "csv": "S2_all_genes.csv",
+          "columns": 3
+        }
+      ]
+    },
+    {
+      "id": "s1_stem",
+      "label": "S1 + Stem",
+      "dataRoot": "datasets/s1_stem",
+      "dataPath": "/dataset-data/s1_stem",
+      "defaultSample": "S1",
+      "defaultGene": "Soltu.DM.01G000010",
+      "samples": [
+        {
+          "id": "S1",
+          "label": "S1",
+          "columns": 4,
+          "contoursPath": "/data/contours/S1"
+        },
+        {
+          "id": "Stem",
+          "label": "Stem",
+          "columns": 4
+        }
+      ]
+    }
+  ]
+}

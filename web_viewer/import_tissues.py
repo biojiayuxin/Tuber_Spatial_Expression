@@ -14,12 +14,25 @@ TISSUES_TABLE = "tissues"
 ASSIGNMENTS_TABLE = "tissue_cell_assignments"
 
 
-def sample_for_rep(rep):
+def parse_sample_rules(values):
+    rules = []
+    for value in values:
+        if "=" not in value:
+            raise ValueError(f"sample rule must be SAMPLE=prefix, got {value!r}")
+        sample, prefix = value.split("=", 1)
+        sample = sample.strip()
+        prefix = prefix.strip().lower()
+        if not sample or not prefix:
+            raise ValueError(f"sample rule must be SAMPLE=prefix, got {value!r}")
+        rules.append((sample, prefix))
+    return rules
+
+
+def sample_for_rep(rep, sample_rules):
     rep_lower = rep.lower()
-    if rep_lower.startswith("s1_"):
-        return "S1"
-    if rep_lower.startswith("s2_"):
-        return "S2"
+    for sample, prefix in sample_rules:
+        if rep_lower.startswith(prefix):
+            return sample
     return None
 
 
@@ -61,7 +74,7 @@ def run_r_export(rda_path, object_name, tissue_column):
     return tsv_path
 
 
-def load_tissue_rows(tsv_path):
+def load_tissue_rows(tsv_path, sample_rules):
     rows = []
     with open(tsv_path, newline="") as handle:
         reader = csv.DictReader(handle, delimiter="\t")
@@ -73,7 +86,7 @@ def load_tissue_rows(tsv_path):
             rows.append(
                 {
                     "rep": rep,
-                    "sample": sample_for_rep(rep),
+                    "sample": sample_for_rep(rep, sample_rules),
                     "cell_id": int(row["cell_id"]),
                     "tissue_id": tissue_id,
                 }
@@ -232,7 +245,11 @@ def import_tissues(args):
 
     tsv_path = run_r_export(args.rda, args.object_name, args.tissue_column)
     try:
-        rows = load_tissue_rows(tsv_path)
+        sample_rules = parse_sample_rules(args.sample_rule) if args.sample_rule else [
+            ("S1", "s1_"),
+            ("S2", "s2_"),
+        ]
+        rows = load_tissue_rows(tsv_path, sample_rules)
     finally:
         tsv_path.unlink(missing_ok=True)
 
@@ -267,6 +284,11 @@ def main():
     parser.add_argument("--tissue-column", default="celltype")
     parser.add_argument("--replicates-json", default="web_viewer/data/replicates.json")
     parser.add_argument("--db", default="web_viewer/data/expression.sqlite")
+    parser.add_argument(
+        "--sample-rule",
+        action="append",
+        help="Map output sample id to orig.ident prefix, for example S1=s1_",
+    )
     args = parser.parse_args()
 
     import_tissues(args)

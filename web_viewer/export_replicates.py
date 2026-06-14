@@ -41,12 +41,25 @@ def load_spatial_cells(path):
     return payload, {cell["id"]: cell for cell in payload["cells"]}
 
 
-def sample_for_rep(rep):
+def parse_sample_rules(values):
+    rules = []
+    for value in values:
+        if "=" not in value:
+            raise ValueError(f"sample rule must be SAMPLE=prefix, got {value!r}")
+        sample, prefix = value.split("=", 1)
+        sample = sample.strip()
+        prefix = prefix.strip().lower()
+        if not sample or not prefix:
+            raise ValueError(f"sample rule must be SAMPLE=prefix, got {value!r}")
+        rules.append((sample, prefix))
+    return rules
+
+
+def sample_for_rep(rep, sample_rules):
     rep_lower = rep.lower()
-    if rep_lower.startswith("s1_"):
-        return "S1"
-    if rep_lower.startswith("s2_"):
-        return "S2"
+    for sample, prefix in sample_rules:
+        if rep_lower.startswith(prefix):
+            return sample
     return None
 
 
@@ -161,28 +174,23 @@ def assign_sample_replicates(sample, reps, cell_by_id, width, height, tile_size)
     return replicate_payloads, duplicate_assignments
 
 
-def export_replicates(rda, object_name, cells_s1, cells_s2, contours_root, out_path):
+def export_replicates(rda, object_name, sample_inputs, contours_root, out_path, sample_rules):
     tsv_path = run_r_export(rda, object_name)
     try:
         rep_cells = load_rep_cells(tsv_path)
     finally:
         tsv_path.unlink(missing_ok=True)
 
-    spatial_s1, s1_by_id = load_spatial_cells(cells_s1)
-    spatial_s2, s2_by_id = load_spatial_cells(cells_s2)
-
     samples = {}
     duplicate_assignments = {}
-    for sample, spatial, cell_by_id in [
-        ("S1", spatial_s1, s1_by_id),
-        ("S2", spatial_s2, s2_by_id),
-    ]:
+    for sample, cells_path in sample_inputs:
+        spatial, cell_by_id = load_spatial_cells(cells_path)
         manifest_path = Path(contours_root) / sample / "manifest.json"
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         reps = {
             rep: ids
             for rep, ids in rep_cells.items()
-            if sample_for_rep(rep) == sample
+            if sample_for_rep(rep, sample_rules) == sample
         }
         replicate_payloads, duplicates = assign_sample_replicates(
             sample,
@@ -232,19 +240,50 @@ def main():
     )
     parser.add_argument("--rda", required=True)
     parser.add_argument("--object-name", default="st")
-    parser.add_argument("--cells-S1", default="web_viewer/data/S1_cells.json")
-    parser.add_argument("--cells-S2", default="web_viewer/data/S2_cells.json")
+    parser.add_argument(
+        "--sample",
+        action="append",
+        help="Sample cell metadata mapping SAMPLE=path/to/cells.json",
+    )
+    parser.add_argument("--cells-S1", default=None)
+    parser.add_argument("--cells-S2", default=None)
     parser.add_argument("--contours-root", default="web_viewer/data/contours")
     parser.add_argument("--out", default="web_viewer/data/replicates.json")
+    parser.add_argument(
+        "--sample-rule",
+        action="append",
+        help="Map output sample id to orig.ident prefix, for example S1=s1_",
+    )
     args = parser.parse_args()
+
+    sample_inputs = []
+    for value in args.sample or []:
+        if "=" not in value:
+            raise ValueError(f"--sample must be SAMPLE=path, got {value!r}")
+        sample, path = value.split("=", 1)
+        sample_inputs.append((sample.strip(), path.strip()))
+    if not sample_inputs:
+        if args.cells_S1:
+            sample_inputs.append(("S1", args.cells_S1))
+        else:
+            sample_inputs.append(("S1", "web_viewer/data/S1_cells.json"))
+        if args.cells_S2:
+            sample_inputs.append(("S2", args.cells_S2))
+        else:
+            sample_inputs.append(("S2", "web_viewer/data/S2_cells.json"))
+
+    sample_rules = parse_sample_rules(args.sample_rule) if args.sample_rule else [
+        ("S1", "s1_"),
+        ("S2", "s2_"),
+    ]
 
     export_replicates(
         args.rda,
         args.object_name,
-        args.cells_S1,
-        args.cells_S2,
+        sample_inputs,
         args.contours_root,
         args.out,
+        sample_rules,
     )
 
 

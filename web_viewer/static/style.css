@@ -72,6 +72,7 @@ p {
 }
 
 .mode-control,
+.dataset-control,
 .search {
   display: grid;
   gap: 8px;
@@ -145,7 +146,7 @@ button:hover {
 
 .sample-toggle {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(auto-fit, minmax(86px, 1fr));
   gap: 8px;
 }
 

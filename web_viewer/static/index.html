@@ -16,9 +16,15 @@
         </div>
       </div>
 
+      <div class="dataset-control">
+        <label for="datasetSelect">Dataset</label>
+        <select id="datasetSelect">
+          <option value="">Loading...</option>
+        </select>
+      </div>
+
       <div class="sample-toggle" role="group" aria-label="Sample">
-        <button type="button" data-sample="S1" class="active">S1</button>
-        <button type="button" data-sample="S2">S2</button>
+        <button type="button" disabled>Loading...</button>
       </div>
 
       <div class="mode-control">
@@ -56,7 +62,7 @@
       <div class="stats">
         <div>
           <span>Sample</span>
-          <strong id="currentSample">S1</strong>
+          <strong id="currentSample">-</strong>
         </div>
         <div>
           <span>Cells</span>

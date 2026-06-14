@@ -14,9 +14,8 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[1]
 WEB_ROOT = Path(__file__).resolve().parent
 STATIC_ROOT = WEB_ROOT / "static"
-DATA_ROOT = WEB_ROOT / "data"
 CACHE_ROOT = WEB_ROOT / "cache"
-DB_PATH = DATA_ROOT / "expression.sqlite"
+DATASETS_CONFIG_PATH = WEB_ROOT / "datasets.json"
 CATEGORY_COLORS_PATH = ROOT / "colors.txt"
 CACHE_VERSION = 2
 DOTPLOT_CLUSTER_COLUMN = "seurat_clusters"
@@ -24,14 +23,78 @@ TISSUE_COLUMN = "celltype"
 TISSUES_TABLE = "tissues"
 TISSUE_ASSIGNMENTS_TABLE = "tissue_cell_assignments"
 
-SAMPLES = {
-    "S1": ROOT / "S1_all_genes.csv",
-    "S2": ROOT / "S2_all_genes.csv",
-}
+
+def load_dataset_catalog():
+    payload = json.loads(DATASETS_CONFIG_PATH.read_text(encoding="utf-8"))
+    datasets = []
+    for dataset in payload.get("datasets", []):
+        item = dict(dataset)
+        item["data_root"] = (WEB_ROOT / item["dataRoot"]).resolve()
+        item["db_path"] = item["data_root"] / "expression.sqlite"
+        item["cache_root"] = CACHE_ROOT / item["id"]
+        samples = []
+        for sample in item.get("samples", []):
+            sample_item = dict(sample)
+            if sample_item.get("csv"):
+                sample_item["csv_path"] = (ROOT / sample_item["csv"]).resolve()
+            samples.append(sample_item)
+        item["samples"] = samples
+        item["sample_ids"] = [sample["id"] for sample in samples]
+        datasets.append(item)
+
+    dataset_by_id = {dataset["id"]: dataset for dataset in datasets}
+    default_id = payload.get("defaultDataset") or (datasets[0]["id"] if datasets else "")
+    return {
+        "defaultDataset": default_id,
+        "datasets": datasets,
+        "datasetById": dataset_by_id,
+    }
 
 
-def connect_db():
-    return sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
+def get_dataset(dataset_id=None):
+    catalog = load_dataset_catalog()
+    selected_id = dataset_id or catalog["defaultDataset"]
+    dataset = catalog["datasetById"].get(selected_id)
+    if dataset is None:
+        raise KeyError(f"dataset {selected_id!r} not found")
+    return dataset
+
+
+def public_dataset_payload():
+    catalog = load_dataset_catalog()
+    return {
+        "defaultDataset": catalog["defaultDataset"],
+        "datasets": [
+            {
+                "id": dataset["id"],
+                "label": dataset.get("label", dataset["id"]),
+                "dataPath": dataset.get("dataPath", f"/dataset-data/{dataset['id']}"),
+                "defaultSample": dataset.get("defaultSample") or dataset["sample_ids"][0],
+                "defaultGene": dataset.get("defaultGene", ""),
+                "samples": [
+                    {
+                        "id": sample["id"],
+                        "label": sample.get("label", sample["id"]),
+                        "columns": int(sample.get("columns") or 0),
+                        "contoursPath": sample.get("contoursPath", ""),
+                    }
+                    for sample in dataset["samples"]
+                ],
+            }
+            for dataset in catalog["datasets"]
+        ],
+    }
+
+
+def sample_config(dataset, sample_id):
+    for sample in dataset["samples"]:
+        if sample["id"] == sample_id:
+            return sample
+    raise KeyError(f"sample {sample_id!r} not found in dataset {dataset['id']!r}")
+
+
+def connect_db(dataset):
+    return sqlite3.connect(f"file:{dataset['db_path']}?mode=ro", uri=True)
 
 
 def json_response(handler, status, payload):
@@ -104,33 +167,38 @@ def read_gene_names(csv_path):
     return header[1:]
 
 
-def get_gene_names():
-    if DB_PATH.exists():
+def get_gene_names(dataset):
+    if dataset["db_path"].exists():
         try:
-            with connect_db() as conn:
+            with connect_db(dataset) as conn:
                 rows = conn.execute("SELECT gene FROM genes ORDER BY gene_id").fetchall()
             if rows:
                 return [row[0] for row in rows]
         except sqlite3.Error as exc:
             print(f"SQLite gene list unavailable, falling back to JSON/CSV: {exc}", flush=True)
 
-    genes_path = DATA_ROOT / "genes.json"
+    genes_path = dataset["data_root"] / "genes.json"
     if genes_path.exists():
         return json.loads(genes_path.read_text(encoding="utf-8"))
 
-    genes = read_gene_names(SAMPLES["S1"])
-    DATA_ROOT.mkdir(parents=True, exist_ok=True)
+    csv_samples = [sample for sample in dataset["samples"] if sample.get("csv_path")]
+    if not csv_samples:
+        raise RuntimeError(
+            f"gene list unavailable for dataset {dataset['id']}; build expression.sqlite first"
+        )
+    genes = read_gene_names(csv_samples[0]["csv_path"])
+    dataset["data_root"].mkdir(parents=True, exist_ok=True)
     genes_path.write_text(json.dumps(genes, separators=(",", ":")), encoding="utf-8")
     return genes
 
 
-def cache_path(sample, gene):
+def cache_path(dataset, sample, gene):
     safe_gene = gene.replace("/", "_").replace("\\", "_")
-    return CACHE_ROOT / f"{sample}_{safe_gene}.json"
+    return dataset["cache_root"] / f"{sample}_{safe_gene}.json"
 
 
-def load_expression_from_db(sample, gene):
-    with connect_db() as conn:
+def load_expression_from_db(dataset, sample, gene):
+    with connect_db(dataset) as conn:
         gene_row = conn.execute(
             "SELECT gene_id FROM genes WHERE gene = ?",
             (gene,),
@@ -172,8 +240,8 @@ def load_expression_from_db(sample, gene):
     }
 
 
-def load_expression_from_csv(sample, gene):
-    path = cache_path(sample, gene)
+def load_expression_from_csv(dataset, sample, gene):
+    path = cache_path(dataset, sample, gene)
     if path.exists():
         payload = json.loads(path.read_text(encoding="utf-8"))
         if (
@@ -184,7 +252,11 @@ def load_expression_from_csv(sample, gene):
         ):
             return payload
 
-    csv_path = SAMPLES[sample]
+    csv_path = sample_config(dataset, sample).get("csv_path")
+    if csv_path is None:
+        raise RuntimeError(
+            f"CSV fallback unavailable for sample {sample} in dataset {dataset['id']}"
+        )
     df = pd.read_csv(csv_path, usecols=["cell", gene])
     values_all = df[gene].astype(float)
     df_nonzero = df[values_all > 0]
@@ -204,19 +276,19 @@ def load_expression_from_csv(sample, gene):
         "values": values,
     }
 
-    CACHE_ROOT.mkdir(parents=True, exist_ok=True)
+    dataset["cache_root"].mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
     return payload
 
 
-def load_expression(sample, gene):
-    if DB_PATH.exists():
+def load_expression(dataset, sample, gene):
+    if dataset["db_path"].exists():
         try:
-            return load_expression_from_db(sample, gene)
+            return load_expression_from_db(dataset, sample, gene)
         except sqlite3.Error as exc:
             print(f"SQLite expression lookup failed, falling back to CSV/cache: {exc}", flush=True)
 
-    return load_expression_from_csv(sample, gene)
+    return load_expression_from_csv(dataset, sample, gene)
 
 
 def db_table_exists(conn, name):
@@ -237,11 +309,13 @@ def get_metadata_value(conn, key, default=None):
     return row[0] if row is not None else default
 
 
-def load_dotplot_from_db(gene):
-    if not DB_PATH.exists():
-        raise RuntimeError("dotplot database not found; build web_viewer/data/expression.sqlite first")
+def load_dotplot_from_db(dataset, gene):
+    if not dataset["db_path"].exists():
+        raise RuntimeError(
+            f"dotplot database not found for dataset {dataset['id']}; build expression.sqlite first"
+        )
 
-    with connect_db() as conn:
+    with connect_db(dataset) as conn:
         if not (
             db_table_exists(conn, "dotplot_clusters")
             and db_table_exists(conn, "dotplot_gene_cluster_stats")
@@ -323,11 +397,13 @@ def load_dotplot_from_db(gene):
     }
 
 
-def load_tissues_from_db():
-    if not DB_PATH.exists():
-        raise RuntimeError("tissue database not found; build web_viewer/data/expression.sqlite first")
+def load_tissues_from_db(dataset):
+    if not dataset["db_path"].exists():
+        raise RuntimeError(
+            f"tissue database not found for dataset {dataset['id']}; build expression.sqlite first"
+        )
 
-    with connect_db() as conn:
+    with connect_db(dataset) as conn:
         if not (
             db_table_exists(conn, TISSUES_TABLE)
             and db_table_exists(conn, TISSUE_ASSIGNMENTS_TABLE)
@@ -357,7 +433,7 @@ def load_tissues_from_db():
         ).fetchall()
 
     samples = {}
-    for sample in SAMPLES:
+    for sample in dataset["sample_ids"]:
         samples[sample] = {
             "sample": sample,
             "assignedCellCount": 0,
@@ -395,10 +471,10 @@ def load_tissues_from_db():
     }
 
 
-def get_json_document(name, fallback_path):
-    if DB_PATH.exists():
+def get_json_document(dataset, name, fallback_path):
+    if dataset["db_path"].exists():
         try:
-            with connect_db() as conn:
+            with connect_db(dataset) as conn:
                 row = conn.execute(
                     "SELECT payload FROM json_documents WHERE name = ?",
                     (name,),
@@ -422,6 +498,20 @@ class Handler(SimpleHTTPRequestHandler):
         if clean_path.startswith("data/"):
             return str(WEB_ROOT / clean_path)
 
+        if clean_path.startswith("dataset-data/"):
+            parts = clean_path.split("/", 2)
+            if len(parts) >= 3:
+                dataset_id = parts[1]
+                try:
+                    dataset = get_dataset(dataset_id)
+                except KeyError:
+                    return str(WEB_ROOT / "__missing_dataset__")
+                target = (dataset["data_root"] / parts[2]).resolve()
+                if target == dataset["data_root"] or dataset["data_root"] in target.parents:
+                    return str(target)
+                return str(WEB_ROOT / "__invalid_dataset_path__")
+            return str(WEB_ROOT / "__missing_dataset_file__")
+
         if clean_path == "":
             return str(STATIC_ROOT / "index.html")
 
@@ -429,10 +519,25 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_GET(self):
         parsed = urlparse(self.path)
+        params = parse_qs(parsed.query)
+
+        if parsed.path == "/api/datasets":
+            json_response(self, 200, public_dataset_payload())
+            return
+
+        try:
+            dataset = get_dataset((params.get("dataset") or [""])[0].strip() or None)
+        except KeyError as exc:
+            json_response(self, 404, {"error": str(exc)})
+            return
 
         if parsed.path == "/api/genes":
-            genes = get_gene_names()
-            json_response(self, 200, {"genes": genes})
+            try:
+                genes = get_gene_names(dataset)
+            except RuntimeError as exc:
+                json_response(self, 503, {"error": str(exc)})
+                return
+            json_response(self, 200, {"dataset": dataset["id"], "genes": genes})
             return
 
         if parsed.path == "/api/colors":
@@ -440,7 +545,7 @@ class Handler(SimpleHTTPRequestHandler):
             return
 
         if parsed.path == "/api/replicates":
-            replicates = get_json_document("replicates", DATA_ROOT / "replicates.json")
+            replicates = get_json_document(dataset, "replicates", dataset["data_root"] / "replicates.json")
             if replicates is None:
                 json_response(self, 404, {"error": "replicates not found"})
                 return
@@ -449,7 +554,7 @@ class Handler(SimpleHTTPRequestHandler):
 
         if parsed.path == "/api/tissues":
             try:
-                payload = load_tissues_from_db()
+                payload = load_tissues_from_db(dataset)
             except RuntimeError as exc:
                 json_response(self, 503, {"error": str(exc)})
                 return
@@ -461,23 +566,27 @@ class Handler(SimpleHTTPRequestHandler):
             return
 
         if parsed.path == "/api/gene":
-            params = parse_qs(parsed.query)
             gene = (params.get("gene") or [""])[0].strip()
             if not gene:
                 json_response(self, 400, {"error": "missing gene"})
                 return
 
-            genes = get_gene_names()
+            try:
+                genes = get_gene_names(dataset)
+            except RuntimeError as exc:
+                json_response(self, 503, {"error": str(exc)})
+                return
             if gene not in genes:
                 json_response(self, 404, {"error": f"{gene} not found"})
                 return
 
             try:
                 samples = {
-                    sample: load_expression(sample, gene)
-                    for sample in SAMPLES
+                    sample: load_expression(dataset, sample, gene)
+                    for sample in dataset["sample_ids"]
                 }
                 payload = {
+                    "dataset": dataset["id"],
                     "gene": gene,
                     "range": {
                         "vmin": min(sample_payload["vmin"] for sample_payload in samples.values()),
@@ -488,19 +597,21 @@ class Handler(SimpleHTTPRequestHandler):
             except ValueError as exc:
                 json_response(self, 404, {"error": str(exc)})
                 return
+            except RuntimeError as exc:
+                json_response(self, 503, {"error": str(exc)})
+                return
 
             json_response(self, 200, payload)
             return
 
         if parsed.path == "/api/dotplot":
-            params = parse_qs(parsed.query)
             gene = (params.get("gene") or [""])[0].strip()
             if not gene:
                 json_response(self, 400, {"error": "missing gene"})
                 return
 
             try:
-                payload = load_dotplot_from_db(gene)
+                payload = load_dotplot_from_db(dataset, gene)
             except ValueError as exc:
                 json_response(self, 404, {"error": str(exc)})
                 return
@@ -523,8 +634,10 @@ def main():
     parser.add_argument("--port", type=int, default=8000)
     args = parser.parse_args()
 
-    DATA_ROOT.mkdir(parents=True, exist_ok=True)
     CACHE_ROOT.mkdir(parents=True, exist_ok=True)
+    for dataset in load_dataset_catalog()["datasets"]:
+        dataset["data_root"].mkdir(parents=True, exist_ok=True)
+        dataset["cache_root"].mkdir(parents=True, exist_ok=True)
 
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     print(f"Serving http://{args.host}:{args.port}")

@@ -14,6 +14,8 @@ const OUTLINE_MAX_SCREEN_PX = 1.25;
 const OUTLINE_BASE_SCREEN_PX = 0.22;
 
 const state = {
+  datasetCatalog: [],
+  currentDataset: null,
   samples: {},
   expressions: {},
   clusterMeta: { clusters: [], maps: {} },
@@ -22,7 +24,7 @@ const state = {
   displayMode: "gene",
   selectedCluster: "",
   selectedTissue: "",
-  currentSample: "S1",
+  currentSample: "",
   currentGene: "",
   expressionRange: { vmin: 0, vmax: 0 },
   view: { scale: 1, x: 0, y: 0 },
@@ -40,6 +42,8 @@ const els = {
   geneList: document.getElementById("geneList"),
   status: document.getElementById("status"),
   modeSelect: document.getElementById("modeSelect"),
+  datasetSelect: document.getElementById("datasetSelect"),
+  sampleToggle: document.querySelector(".sample-toggle"),
   modePanels: document.querySelectorAll("[data-mode-panel]"),
   viewer: document.querySelector(".viewer"),
   currentSample: document.getElementById("currentSample"),
@@ -115,8 +119,35 @@ function rectsIntersect(a, b) {
   return !(a.right < b.left || a.left > b.right || a.bottom < b.top || a.top > b.bottom);
 }
 
+function sampleConfig(sampleId) {
+  const dataset = state.currentDataset;
+  return dataset ? (dataset.samples || []).find((sample) => sample.id === sampleId) : null;
+}
+
+function sampleLabel(sampleId) {
+  const sample = sampleConfig(sampleId);
+  return sample ? sample.label || sample.id : sampleId;
+}
+
+function datasetParam() {
+  return state.currentDataset ? `dataset=${encodeURIComponent(state.currentDataset.id)}` : "";
+}
+
+function apiUrl(path, params = {}) {
+  const query = new URLSearchParams();
+  if (state.currentDataset) query.set("dataset", state.currentDataset.id);
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== null && value !== "") {
+      query.set(key, value);
+    }
+  }
+  const qs = query.toString();
+  return qs ? `${path}?${qs}` : path;
+}
+
 function panelColumns(sample, replicateCount) {
-  if (sample === "S1") return 4;
+  const config = sampleConfig(sample);
+  if (config && Number(config.columns) > 0) return Number(config.columns);
   return Math.max(1, replicateCount);
 }
 
@@ -829,9 +860,12 @@ async function loadSpatial() {
   if (typeof Path2D === "undefined") {
     throw new Error("This browser does not support Path2D, so cell contours cannot be rendered");
   }
+  const dataset = state.currentDataset;
+  if (!dataset) throw new Error("No dataset selected");
 
-  setStatus("Loading S1/S2 contours, replicate indexes, cluster data, and tissue data...");
-  const tissueRequest = fetch("/api/tissues").then(async (response) => {
+  const sampleLabels = (dataset.samples || []).map((sample) => sample.label || sample.id).join("/");
+  setStatus(`Loading ${sampleLabels} contours, replicate indexes, cluster data, and tissue data...`);
+  const tissueRequest = fetch(apiUrl("/api/tissues")).then(async (response) => {
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
       return { error: payload.error || "Tissue data unavailable" };
@@ -842,20 +876,19 @@ async function loadSpatial() {
     if (!response.ok) return { clusters: {}, tissues: {} };
     return response.json();
   }).catch(() => ({ clusters: {}, tissues: {} }));
-  const [s1, s2, replicates, clusters, tissues, colors] = await Promise.all([
-    fetch("/data/contours/S1/manifest.json").then((response) => {
-      if (!response.ok) throw new Error("Missing S1 contour data; run web_viewer/export_contours.py first");
+  const manifestRequests = (dataset.samples || []).map((sample) => (
+    fetch(`${(sample.contoursPath || `${dataset.dataPath}/contours/${sample.id}`).replace(/\/$/, "")}/manifest.json`).then((response) => {
+      if (!response.ok) throw new Error(`Missing ${sample.label || sample.id} contour data; run web_viewer/export_contours.py first`);
       return response.json();
-    }),
-    fetch("/data/contours/S2/manifest.json").then((response) => {
-      if (!response.ok) throw new Error("Missing S2 contour data; run web_viewer/export_contours.py first");
-      return response.json();
-    }),
-    fetch("/api/replicates").then((response) => {
+    })
+  ));
+  const [manifests, replicates, clusters, tissues, colors] = await Promise.all([
+    Promise.all(manifestRequests),
+    fetch(apiUrl("/api/replicates")).then((response) => {
       if (!response.ok) throw new Error("Missing replicate data; run web_viewer/export_replicates.py first");
       return response.json();
     }),
-    fetch("/data/clusters.json").then((response) => {
+    fetch(`${dataset.dataPath}/clusters.json`).then((response) => {
       if (!response.ok) throw new Error("Missing cluster data; run web_viewer/export_clusters.py first");
       return response.json();
     }),
@@ -863,8 +896,16 @@ async function loadSpatial() {
     colorsRequest,
   ]);
 
-  state.samples.S1 = prepareSpatial(s1, replicates.samples.S1);
-  state.samples.S2 = prepareSpatial(s2, replicates.samples.S2);
+  state.samples = {};
+  state.expressions = {};
+  for (const manifest of manifests) {
+    const sampleId = manifest.sample;
+    const replicatePayload = replicates.samples ? replicates.samples[sampleId] : null;
+    if (!replicatePayload) {
+      throw new Error(`Missing replicate metadata for ${sampleId}`);
+    }
+    state.samples[sampleId] = prepareSpatial(manifest, replicatePayload);
+  }
   loadCategoryColors(colors);
   loadClusterMeta(clusters);
   loadTissueMeta(tissues);
@@ -984,8 +1025,81 @@ function loadTissueMeta(payload) {
   els.tissueSelect.disabled = !state.tissueMeta.tissues.length;
 }
 
+async function loadDatasetCatalog() {
+  const response = await fetch("/api/datasets");
+  if (!response.ok) throw new Error("Dataset configuration unavailable");
+  const payload = await response.json();
+  state.datasetCatalog = payload.datasets || [];
+  if (!state.datasetCatalog.length) throw new Error("No datasets configured");
+
+  els.datasetSelect.innerHTML = "";
+  for (const dataset of state.datasetCatalog) {
+    const option = document.createElement("option");
+    option.value = dataset.id;
+    option.textContent = dataset.label || dataset.id;
+    els.datasetSelect.appendChild(option);
+  }
+
+  const params = new URLSearchParams(window.location.search);
+  const requestedId = params.get("dataset");
+  const selected = state.datasetCatalog.find((dataset) => dataset.id === requestedId)
+    || state.datasetCatalog.find((dataset) => dataset.id === payload.defaultDataset)
+    || state.datasetCatalog[0];
+  setDataset(selected.id, { updateUrl: false, resetGene: true });
+}
+
+function setDataset(datasetId, options = {}) {
+  const dataset = state.datasetCatalog.find((item) => item.id === datasetId);
+  if (!dataset) return;
+
+  state.currentDataset = dataset;
+  state.samples = {};
+  state.expressions = {};
+  state.clusterMeta = { clusters: [], maps: {} };
+  state.tissueMeta = { tissues: [], maps: {}, error: "" };
+  state.selectedCluster = "";
+  state.selectedTissue = "";
+  state.currentGene = "";
+  state.expressionRange = { vmin: 0, vmax: 0 };
+  state.dotplot = { payload: null, error: "", loading: false };
+  state.currentSample = dataset.defaultSample || ((dataset.samples || [])[0] || {}).id || "";
+  els.datasetSelect.value = dataset.id;
+
+  if (options.resetGene !== false && dataset.defaultGene) {
+    els.input.value = dataset.defaultGene;
+  }
+
+  renderSampleButtons();
+  if (options.updateUrl !== false) {
+    const url = new URL(window.location.href);
+    url.searchParams.set("dataset", dataset.id);
+    window.history.replaceState({}, "", url);
+  }
+}
+
+function renderSampleButtons() {
+  els.sampleToggle.innerHTML = "";
+  const samples = state.currentDataset ? state.currentDataset.samples || [] : [];
+  for (const sample of samples) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.dataset.sample = sample.id;
+    button.textContent = sample.label || sample.id;
+    button.classList.toggle("active", sample.id === state.currentSample);
+    button.addEventListener("click", () => setSample(sample.id));
+    els.sampleToggle.appendChild(button);
+  }
+}
+
+async function reloadCurrentDataset() {
+  resizeCanvas();
+  await loadSpatial();
+  await loadGenes();
+  await queryGene(els.input.value);
+}
+
 async function loadGenes() {
-  const response = await fetch("/api/genes");
+  const response = await fetch(apiUrl("/api/genes"));
   if (!response.ok) return;
   const payload = await response.json();
   els.geneList.innerHTML = "";
@@ -1025,10 +1139,9 @@ async function queryGene(gene) {
   setDisplayMode("gene");
   setStatus(`Querying ${gene} expression and cluster dotplot...`);
 
-  const encodedGene = encodeURIComponent(gene);
   const [geneResponse, dotplotResponse] = await Promise.all([
-    fetch(`/api/gene?gene=${encodedGene}`),
-    fetch(`/api/dotplot?gene=${encodedGene}`),
+    fetch(apiUrl("/api/gene", { gene })),
+    fetch(apiUrl("/api/dotplot", { gene })),
   ]);
   const payload = await geneResponse.json();
   const dotplotPayload = await dotplotResponse.json();
@@ -1043,8 +1156,13 @@ async function queryGene(gene) {
 
   state.currentGene = gene;
   state.expressionRange = payload.range || { vmin: 0, vmax: 0 };
-  state.expressions.S1 = unpackExpression(payload.samples.S1);
-  state.expressions.S2 = unpackExpression(payload.samples.S2);
+  state.expressions = {};
+  for (const sample of state.currentDataset.samples || []) {
+    const samplePayload = payload.samples ? payload.samples[sample.id] : null;
+    state.expressions[sample.id] = samplePayload
+      ? unpackExpression(samplePayload)
+      : { map: new Map(), min: 0, max: 0, nonzero: 0 };
+  }
   if (dotplotResponse.ok) {
     state.dotplot = { payload: dotplotPayload, error: "", loading: false };
   } else {
@@ -1063,7 +1181,9 @@ function updateStats() {
   const spatial = currentSpatial();
   const { vmin, vmax } = state.expressionRange;
   const highlightMode = activeHighlightMode();
-  els.currentSample.textContent = spatial ? `${state.currentSample} (${spatial.panels.length} reps)` : state.currentSample;
+  els.currentSample.textContent = spatial
+    ? `${sampleLabel(state.currentSample)} (${spatial.panels.length} reps)`
+    : sampleLabel(state.currentSample);
   els.cellCount.textContent = spatial ? spatial.assignedCellCount.toLocaleString() : "-";
   els.legend.classList.toggle("is-hidden", highlightMode !== "expression");
   els.legendMax.textContent = vmax ? formatNumber(vmax) : "max";
@@ -1081,7 +1201,7 @@ function updateModeControls() {
 
 function setSample(sample) {
   state.currentSample = sample;
-  document.querySelectorAll(".sample-toggle button").forEach((button) => {
+  els.sampleToggle.querySelectorAll("button").forEach((button) => {
     button.classList.toggle("active", button.dataset.sample === sample);
   });
   fitView();
@@ -1126,8 +1246,14 @@ els.form.addEventListener("submit", (event) => {
   queryGene(els.input.value);
 });
 
-document.querySelectorAll(".sample-toggle button").forEach((button) => {
-  button.addEventListener("click", () => setSample(button.dataset.sample));
+els.datasetSelect.addEventListener("change", async () => {
+  setDataset(els.datasetSelect.value, { updateUrl: true, resetGene: true });
+  try {
+    await reloadCurrentDataset();
+  } catch (error) {
+    setStatus(error.message);
+    console.error(error);
+  }
 });
 
 els.modeSelect.addEventListener("change", () => {
@@ -1185,10 +1311,8 @@ window.addEventListener("resize", () => {
 
 (async function init() {
   try {
-    resizeCanvas();
-    await loadSpatial();
-    await loadGenes();
-    await queryGene(els.input.value);
+    await loadDatasetCatalog();
+    await reloadCurrentDataset();
   } catch (error) {
     setStatus(error.message);
     console.error(error);
